@@ -100,7 +100,26 @@ python3 scripts/validate_sim.py              # V1-V9（V9=影子门禁 + live.* 
 bash scripts/run_live_day.sh --replay        # 一日全流程回放（真实行情快照）
 ```
 
-## 6. 已知边界（诚实登记）
+## 6. 人工干预物理开关 + 看板 + 聚合（T-Fin06 新增）
+
+```bash
+python3 scripts/kill_switch.py --panic "原因"   # 一键强平 A/B（台账真实收盘价+滑点费）
+                                              # + 写根目录 PANIC_LOCK.flag → 全局停牌
+python3 scripts/kill_switch.py --release       # 解锁，恢复自动运转
+python3 scripts/dashboard.py --port 8501       # 本地看板 http://127.0.0.1:8501
+```
+
+- **开关纪律**：flag 存在期间，`run_live_day.sh` 与 `shadow_broker --match`
+  首行即拦截（"人工干预锁定中，跳过今日交易"）；数据库只增不改不删
+  （panic 只追加 fills/events 行，eod 净值曲线零触碰）。
+- **看板**（Flask+SVG，Streamlit 依赖链在 Termux/arm64 无法编译——已登记）：
+  指标卡（净值/今日盈亏/信号灯/MDD/夏普/卡玛）+ A/B/C 腿持仓饼图 +
+  影子 vs 沪深300 净值曲线（附正式台账回放基准虚线）+ 最近 20 笔流水；只读。
+- **聚合**：`aggregate_performance.py` 每日 15:15 产出
+  `reports/aggregate_<date>.md`——10 日胜率热力图（A/B × 黄/绿灯，红灯剔除）
+  + 连涨连跌 + Alpha 合计 + PANIC 开关状态尾注。
+
+## 7. 已知边界（诚实登记）
 
 1. 回放验收模式下，心跳新鲜度以"行情自带会话时戳"为准（非墙钟）——
    快照与 09:30 实盘进程取的是**同一数据集**，仅时钟为演播时钟；

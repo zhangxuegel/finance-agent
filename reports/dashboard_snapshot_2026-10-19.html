@@ -1,0 +1,47 @@
+<!DOCTYPE html><html lang="zh"><head><meta charset="utf-8">
+<title>影子实盘全息看板</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>.banner{background:#152232;border:1px solid #22374d;border-radius:8px;padding:8px;color:#9fb4cc;font-size:12px}</style>
+ body{background:#0e1720;color:#dbe4ef;font-family:sans-serif;margin:0;padding:18px}
+ .grid{display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(150px,1fr))}
+ .card{background:#152232;border:1px solid #22374d;border-radius:10px;padding:14px}
+ .k{color:#7d8fa3;font-size:12px}.v{font-size:22px;font-weight:700;margin-top:6px}
+ .pos{color:#2fa36b}.neg{color:#d1495b}
+ h2{font-size:15px;color:#9fb4cc;margin:22px 0 8px}
+ table{border-collapse:collapse;width:100%}
+ th,td{padding:6px 8px;border-bottom:1px solid #22374d;font-size:12.5px;text-align:left}
+ th{color:#7d8fa3;font-weight:600}
+ .pie{width:150px;height:150px;border-radius:50%;margin:auto}
+ .legend div{display:flex;gap:8px;align-items:center;margin:4px 0}
+ .dot{width:10px;height:10px;border-radius:2px}
+ .panic{background:#5c1b22;border:1px solid #d1495b;border-radius:8px;padding:10px}
+</style></head><body><div class='banner'>📄 看板静态快照（截图等价物）。动态版：python3 scripts/dashboard.py --port 8501 → http://127.0.0.1:8501</div>
+<h1 style="font-size:20px">🛰️ 影子实盘全息看板 · 2026-10-19 21:55:19
+ <small style="color:#7d8fa3;font-size:11px">本地台账只读 · 无实盘</small></h1>
+
+<div class="grid">
+ <div class="card"><div class="k">影子净值</div><div class="v">¥¥976,273</div></div>
+ <div class="card"><div class="k">今日盈亏</div><div class="v neg">-0.01%</div></div>
+ <div class="card"><div class="k">大盘信号灯（收盘口径）</div>
+  <div class="v" style="color:#d1495b">🔴 红灯</div><div class="k">引擎防守模式（急跌熔断门/灯色）</div></div>
+ <div class="card"><div class="k">最大回撤</div><div class="v">0.00%</div></div>
+ <div class="card"><div class="k">夏普（年化）</div><div class="v">0.000</div></div>
+ <div class="card"><div class="k">卡玛（年化/MDD）</div><div class="v">0.00</div></div>
+</div>
+<h2>持仓分布（含各腿名下货币份额；台账最新收盘口径）</h2>
+<div class="grid" style="grid-template-columns:auto 1fr">
+ <div><div class="pie" style="background:conic-gradient(#4aa3df 0deg 360.0deg, #e0a848 360.0deg 360.0deg, #2fa36b 360.0deg 360deg)"></div></div>
+ <div class="card legend"><div><span class="dot" style="background:#4aa3df"></span><span>A 腿·趋势：¥976,273（100.0%）</span></div><div><span class="dot" style="background:#e0a848"></span><span>B 腿·震荡：¥0（0.0%）</span></div><div><span class="dot" style="background:#2fa36b"></span><span>C 腿·货币防守：¥0（0.0%）</span></div></div>
+</div>
+<h2>净值曲线 · 影子 vs 沪深300（1 个交易日台账）</h2>
+<div class="card"><svg viewBox="0 0 880 260" width="100%" preserveAspectRatio="xMidYMid meet"><line x1="36" y1="24.0" x2="844" y2="24.0" stroke="#2a3a4a" stroke-dasharray="3 4"/><text x="6" y="28.0" fill="#7d8fa3" font-size="10">1.0020</text><line x1="36" y1="130.0" x2="844" y2="130.0" stroke="#2a3a4a" stroke-dasharray="3 4"/><text x="6" y="134.0" fill="#7d8fa3" font-size="10">0.9994</text><line x1="36" y1="236.0" x2="844" y2="236.0" stroke="#2a3a4a" stroke-dasharray="3 4"/><text x="6" y="240.0" fill="#7d8fa3" font-size="10">0.9968</text><text x="36" y="254" fill="#7d8fa3" font-size="10">2026-10-20</text><text x="784" y="254" fill="#7d8fa3" font-size="10">2026-10-20</text><polyline fill="none" stroke="#8a97a8" stroke-width="1.6" stroke-dasharray="5 5" points="36.0,154.1"/><polyline fill="none" stroke="#e0a848" stroke-width="2.2" points="36.0,106.0"/><polyline fill="none" stroke="#4aa3df" stroke-width="2.6" points="36.0,106.0"/></svg><div style="font-size:11px;color:#7d8fa3"><span style="color:#8a97a8">■</span> 正式台账（离线回放基准，虚线）　<span style="color:#4aa3df">■</span> 影子净值　<span style="color:#e0a848">■</span> 沪深300（均归一化到起点=1）</div>
+<div style="font-size:11px;color:#7d8fa3;margin-top:6px">
+ 累计超额（Alpha 合计）-0.10pp</div></div>
+<h2>最近撮合明细（20 笔，倒序）</h2>
+<div class="card"><table><tr><th>时间</th><th>腿</th><th>标的</th><th>方向</th>
+<th>数量</th><th>价格</th><th>手续费</th><th>依据</th></tr>
+<tr><td colspan=8 style='color:#7d8fa3'>无成交记录（防守/锁仓/降级门拦截——符合铁律）</td></tr></table></div>
+<p style="color:#61738a;font-size:11px;margin-top:18px">
+台账源：data/shadow_live.db · data/shadow_state.json · data/live/*.csv ·
+data/ensemble_state.json。全部数字可溯源；本看板只读，不写台账，不下单。</p>
+</body></html>

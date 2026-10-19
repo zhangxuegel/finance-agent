@@ -192,6 +192,52 @@ try:
 except Exception as e:  # noqa: BLE001
     check("V9c live.* 台账登记", False, f"{type(e).__name__}: {e}")
 
+# ------------------------------------------------------------- V10 看板/开关/聚合
+try:
+    import aggregate_performance as _ag
+    leg_rets = {"A": {f"2026-10-{d:02d}": (0.01 if d % 2 == 0 else -0.005)
+                      for d in range(3, 19)},
+                "B": {f"2026-10-{d:02d}": (0.02 if d % 3 else -0.01)
+                      for d in range(3, 19)}}
+    lights = {f"2026-10-{d:02d}": ("yellow" if d % 4 < 2 else "green")
+              for d in range(3, 19)}
+    grid = _ag.winrate_grid(leg_rets, lights, 10)
+    ay = [g for g in grid if g["leg"] == "A" and g["light"] == "yellow"][0]
+    by = [g for g in grid if g["leg"] == "B" and g["light"] == "yellow"][0]
+    ag_ = [g for g in grid if g["leg"] == "A" and g["light"] == "green"][0]
+    # 最近 10 台账日 = 09..18：黄灯 d%4∈{0,1} → {9,12,13,16,17}；
+    # A 偶数日 ret>0 → {12,16} = 2/5
+    check("V10a 胜率网格（最近10台账日×灯色分组、红灯剔除）",
+          ay["days"] == 5 and abs(ay["winrate"] - 2 / 5) < 1e-9
+          and ag_["days"] == 5 and abs(ag_["winrate"] - 3 / 5) < 1e-9
+          and by["days"] == 5,
+          f"A黄 {ay['winrate']:.0%} A绿 {ag_['winrate']:.0%}")
+except Exception as e:  # noqa: BLE001
+    check("V10a 胜率网格", False, f"{type(e).__name__}: {e}")
+try:
+    import dashboard as _db
+    svg = _db.svg_curve([("2026-10-01", 100.0, 4800.0),
+                         ("2026-10-02", 101.0, 4880.0)])
+    check("V10b 看板 SVG 双线可渲染（polyline≥2）",
+          svg.count("polyline") == 2, f"n={svg.count('polyline')}")
+    s2, c2, m2 = _db._series([100, 101, 100.5, 102, 103])
+    check("V10b2 绩效数学（上行序列夏普>0、MDD>0）", s2 > 0 and m2 > 0,
+          f"sharpe={s2:.2f} mdd={m2:.4f}")
+except Exception as e:  # noqa: BLE001
+    check("V10b 看板渲染", False, f"{type(e).__name__}: {e}")
+try:
+    import kill_switch as _ks
+    was = _ks.flag_active()
+    _ks.do_panic("V10 验收演练")
+    locked = _ks.flag_active()
+    _ks.do_release()
+    unlocked = not _ks.flag_active()
+    check("V10c 物理开关全周期（panic→flag 落盘 → release→恢复）",
+          locked and unlocked and (was == unlocked or not was),
+          f"was={was}")
+except Exception as e:  # noqa: BLE001
+    check("V10c 物理开关全周期", False, f"{type(e).__name__}: {e}")
+
 # -------------------------------------------------------------
 print("=" * 50)
 if FAILS:

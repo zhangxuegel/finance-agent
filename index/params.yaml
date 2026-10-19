@@ -131,3 +131,6 @@ live:
     ledger: "5 15 * * 1-5"          # 15:05 收盘落库（真实 EOD）
     review_push: "10 15 * * 1-5"    # 15:10 成交复盘推送
   limit_down_rule: "开盘价 ≤ 昨收×0.90(+0.002 容差) → 当日禁买该标的（不伪造流动性）"
+  dashboard_port: 8501         # T-Fin06：本地看板端口（Flask http://127.0.0.1:8501）
+  aggregate_schedule: "15 15 * * 1-5"  # 15:15 连续追踪聚合+胜率热力图
+  kill_switch_flag: PANIC_LOCK.flag    # 人工干预物理开关的红旗文件（根目录）

@@ -86,14 +86,19 @@ data/live/*.csv            影子台账行情（正式台账 CSV + 逐日真实 
 | **影子实盘：跌停不买入** | `live_data_feed.is_limit_down_open`（开盘 ≤ 昨收×0.90 → 当日禁买） | `live.limit_down_rule` |
 | **影子实盘：盘中熔断报警** | `live_monitor.py --monitor`（沪深300 ≤ -2% 立即 webhook；-1% 滞回重置；每 5 分钟） | `live.monitor.*` |
 | **影子实盘：EOD 落库+Alpha** | `shadow_broker --ledger/--review`（真实收盘重估净值；Alpha=影子日收益−沪深300；熔断继承 risk_control） | `data/live/*.csv` + `live.schedule.*` |
+| **连续追踪看板** | `dashboard.py`（Flask+纯SVG：指标卡/A·B·C持仓饼图/影子vs沪深300净值曲线+台账基准虚线/近20笔流水；只读不写台账） | `live.dashboard_port` |
+| **人工干预物理开关** | `kill_switch.py --panic/--release`（A/B 台账真实价强平 + `PANIC_LOCK.flag`；run_live_day 与 match 首行全局拦截；DB 只增不改不删） | `PANIC_LOCK.flag` |
+| **连续追踪聚合+胜率热力图** | `aggregate_performance.py`（10 日 A/B × 黄/绿灯 局部胜率，红灯剔除；连跌/连涨、Alpha 合计、PANIC 状态尾注） | `reports/aggregate_<date>.md` |
 
 审计执行：`python3 scripts/risk_control.py --audit` → `reports/risk_audit_<date>.md`
 赛马回测：`python3 scripts/ensemble_engine.py --daily --replay 20` → `reports/ensemble_<date>.md`
 因子兜底自检：`python3 scripts/factor_mining.py --test`；推链路自检：`python3 scripts/push_notification.py --test`
 黑天鹅拷问：`python3 scripts/crash_test.py` → `reports/crash_test_<date>.md`（先 `python3 scripts/factor_mining.py --audit` 验因子常识）
 每组寻优：`python3 scripts/optimizer.py --ensemble` → `reports/optimizer_ensemble_<date>.md`
-影子实盘一日回放：`bash scripts/run_live_day.sh --replay`（08:45 预案→09:30 真实时价撮合→15:05 EOD→15:10 复盘）；详篇 `docs/shadow_live.md`
-验收自检：`python3 scripts/validate_sim.py`（T-Fin03/04/05 合并）+ `test_sim.py`（T-Fin01/02 回归）
+影子实盘一日回放：`bash scripts/run_live_day.sh --replay`（08:45 预案→09:30 真实时价撮合→15:05 EOD→15:10 复盘→15:15 聚合热力图）；详篇 `docs/shadow_live.md`
+本地看板：`python3 scripts/dashboard.py --port 8501` → `http://127.0.0.1:8501`（Termux 浏览器打开；静态快照 `reports/dashboard_snapshot_<date>.html`）
+紧急制动：`python3 scripts/kill_switch.py --panic "原因"` → 全局停牌（`PANIC_LOCK.flag`）；`--release` 解锁；`--status` 查询
+验收自检：`python3 scripts/validate_sim.py`（V1–V10）+ `test_sim.py`（T-Fin01/02 回归）
 
 详见 `docs/ensemble_and_factor.md`。
 

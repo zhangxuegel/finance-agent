@@ -17,6 +17,13 @@ REPLAY=""
 [ "${1:-}" = "--replay" ] && REPLAY="--replay"
 LOG="logs/live_run_$(date +%F).log"
 mkdir -p logs
+# ---- T-Fin06 全局物理开关守卫：PANIC_LOCK.flag 存在 → 全日停牌 ----
+if [ -f PANIC_LOCK.flag ]; then
+  echo "=== $(date '+%F %T') 人工干预锁定中，跳过今日交易（PANIC_LOCK.flag）===" \
+      | tee -a "$LOG"
+  python3 scripts/kill_switch.py --status | tee -a "$LOG"
+  exit 0
+fi
 run() {
   echo "=== $(date '+%F %T') $* ===" | tee -a "$LOG"
   python3 scripts/"$1" ${2:-} $REPLAY 2>&1 | tee -a "$LOG"
@@ -31,6 +38,7 @@ run() {
   run live_data_feed.py --heartbeat        # 14:55
   run shadow_broker.py --ledger            # 15:05
   run shadow_broker.py --review            # 15:10
+  run aggregate_performance.py             # 15:15 连续追踪聚合+胜率热力图+PANIC状态
 } || exit 1
 echo "=== 全流程完成 → $LOG ===" | tee -a "$LOG"
 exit 0

@@ -196,6 +196,17 @@ def _inject_live_prices(eng, snap: dict, trade_date: str) -> dict:
 
 def stage_match(replay: bool = False, verbose: bool = True) -> dict:
     """09:30 开盘撮合：真实时价 × 引擎方法口 accounting（铁律：次日开盘价）。"""
+    import kill_switch
+    if kill_switch.flag_active():
+        msg = "人工干预锁定中，跳过今日交易（PANIC_LOCK.flag 存在）"
+        print(f"[match] 🛑 {msg}")
+        feed.log_error("panic_lock", msg)
+        try:
+            _push(False, "shadow_match", f"🛑 {msg}")
+        except Exception:  # noqa: BLE001
+            pass
+        kill_switch._event("match_locked", msg)
+        return {"skipped": "panic_lock"}
     now = feed.sh_now()
     trade_date = sh_date()
     if not clock_ok(now, replay):
@@ -359,6 +370,18 @@ def stage_ledger(replay: bool = False, verbose: bool = True) -> dict:
     closes = {c: kmaps[c][-1]["close"] for c in kmaps}
     equity = compute_equity(st, {**closes, "_date": trade_date}, p, eng)
     curve_replace(st, trade_date, equity)
+    # 腿级权益台账（T-Fin06 胜率热力图数据源：A/B 腿逐日局部收益）
+    for leg in ("A", "B"):
+        port = st["sleeves"][leg]
+        leg_eq = port["cash"] + sum(
+            pp["shares"] * closes.get(c, pp["cost"])
+            for c, pp in port["positions"].items())
+        money_of_leg = st["money"].get(leg, 0) * (
+            closes.get(p["ensemble"]["C"]["code"]) or
+            st["money"].get("last_px") or 0)
+        rows_l = [r for r in port["curve"] if r[0] != trade_date]
+        rows_l.append([trade_date, round(leg_eq + money_of_leg, 2)])
+        port["curve"] = sorted(rows_l)
     prev_eq = st["curve"][-2][1] if len(st["curve"]) > 1 else equity
     # ③ 指数与 Alpha
     idx_close, idx_prev = idx_row["close"], idx_row["prev_close"]
@@ -562,6 +585,12 @@ def stage_review(replay: bool = False, verbose: bool = True) -> str:
               "`logs/live_error.log`（抓取/解析异常也在此留痕）", "",
               _kbd_line("data/shadow_live.db（fills/eod/events）+ "
                         "data/shadow_state.json + data/live/*.csv")]
+    import kill_switch as _ks
+    lines += ["", "---", "", ("🛑 **人工干预锁定中（PANIC_LOCK.flag 存在）**"
+                              f"——{(_ks.flag_reason().splitlines() or [''])[0]}"
+                              "。撮合与调度已全局拦截。"
+                              if _ks.flag_active() else
+                              "🟢 人工干预开关状态：**正常**（无 PANIC_LOCK.flag）")]
     os.makedirs(REPORTS, exist_ok=True)
     path = os.path.join(REPORTS, f"shadow_review_{trade_date}.md")
     with open(path, "w", encoding="utf-8") as fl:

@@ -1,6 +1,6 @@
 # 影子实盘 · 今日操作预案 · 2026-10-20
 
-> 生成 2026-10-19 20:55:56 · 台账源：ensemble_state + `EnsembleEngine.export_plan()`（只用 ≤ 台账最后一日数据）
+> 生成 2026-10-19 21:55:41 · 台账源：ensemble_state + `EnsembleEngine.export_plan()`（只用 ≤ 台账最后一日数据）
 
 - 大盘灯：**red** ｜ 引擎防守判定：**防守**（灯色防守）
 - 数据源模式：live

@@ -28,3 +28,22 @@
 === 2026-10-19 20:58:17 shadow_broker.py --review ===
 [review] → /data/data/com.termux/files/home/finance-agent/reports/shadow_review_2026-10-20.md push(ok=False, 未配置 webhook（FIN_PUSH_URL / push.webhook_url_env）)
 === 全流程完成 → logs/live_run_2026-10-19.log ===
+=== 2026-10-19 21:55:39 人工干预锁定中，跳过今日交易（PANIC_LOCK.flag）===
+[kill_switch] 锁定=是（2026-10-19 21:55:30 人工紧急清仓 PANIC:验收演练：极端灾难人工制动测试）
+=== 2026-10-19 21:55:40 live_monitor.py --plan-push ===
+[plan-push] → /data/data/com.termux/files/home/finance-agent/reports/shadow_plan_2026-10-20.md
+=== 2026-10-19 21:55:42 live_data_feed.py --heartbeat ===
+[heartbeat] ✅ live codes=5/5 
+=== 2026-10-19 21:55:47 shadow_broker.py --match ===
+[match] 门=defense fills=0 blocked=[]
+=== 2026-10-19 21:55:52 live_monitor.py --monitor ===
+[monitor] 03:55:53 沪深300 +0.09% （阈值 -2.0%）本拍报警=False 滞回挂起=False
+=== 2026-10-19 21:55:56 live_data_feed.py --heartbeat ===
+[heartbeat] ✅ live codes=5/5 
+=== 2026-10-19 21:56:01 shadow_broker.py --ledger ===
+[ledger] EOD 2026-10-20: NAV ¥976,273 (-0.01%) vs 沪深300 +0.09% → Alpha -0.10pp fills=0 breaker=False
+=== 2026-10-19 21:57:55 shadow_broker.py --review ===
+[review] → /data/data/com.termux/files/home/finance-agent/reports/shadow_review_2026-10-20.md push(ok=False, 未配置 webhook（FIN_PUSH_URL / push.webhook_url_env）)
+=== 2026-10-19 21:57:57 aggregate_performance.py ===
+[aggregate] → /data/data/com.termux/files/home/finance-agent/reports/aggregate_2026-10-19.md
+=== 全流程完成 → logs/live_run_2026-10-19.log ===
