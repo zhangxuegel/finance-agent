@@ -43,6 +43,9 @@ data/*.csv                 行情（东方财富主源 / 腾讯备源，免 Toke
 data/portfolio.json        账户状态（现金/持仓/流水/净值曲线）
 data/risk_state.json       风控锁仓状态 + 熔断事件簿
 reports/<date>.md          每日复盘
+data/shadow_live.db        影子实盘 sqlite 台账（fills/eod/events）
+data/shadow_state.json     影子账户状态（独立演化于真实时价）
+data/live/*.csv            影子台账行情（正式台账 CSV + 逐日真实 EOD 增量）
 ```
 
 ## 定时运行（模拟盘每日收盘后）
@@ -77,13 +80,20 @@ reports/<date>.md          每日复盘
 | **晨报/周末深度复盘** | `report_generator --daily/--weekly`（晨报=灯色/可用资金/持仓分布/昨日盈亏；周报=三腿对比/权重演变/CRO 总结）+ **台账溯源**尾节 | `cron.morning_schedule` |
 | **急跌熔断门** | `ensemble_engine`（基准/逐资产 防守出闸三条件：灯绿+近5日无急跌+高点回归；观察期买入预算衰减 50%） | `ensemble.crash_gate.*` |
 | **黑天鹅崩溃测试** | `crash_test.py`（2015 千股跌停 & 2020 美股熔断 真实历史 × 完整系统；避险 ≤2 交易日、MDD ≤5%，失败自动链路推演） | `data/crash/` 长历史隔离落盘 |
+| **影子实盘：真实行情只读** | `live_data_feed.py`（腾讯 qt 主源+新浪 hq 备源+指数 s_sh000300；心跳 09:25/14:55；新鲜度 ≤180s） | `live.max_quote_delay_sec` |
+| **影子实盘：撮合引擎** | `shadow_broker.py`（portfolio.place_orders 真实时价撮合；sqlite 台账 fills/eod/events；首日克隆 ensemble 台账，此后独立演化） | `data/shadow_live.db` + `live.*` |
+| **影子实盘：实盘时间锁** | `shadow_broker.clock_ok`（撮合仅交易日 09:30-15:00）+ 计划隔离（08:45 预案零实时依赖） | —— |
+| **影子实盘：跌停不买入** | `live_data_feed.is_limit_down_open`（开盘 ≤ 昨收×0.90 → 当日禁买） | `live.limit_down_rule` |
+| **影子实盘：盘中熔断报警** | `live_monitor.py --monitor`（沪深300 ≤ -2% 立即 webhook；-1% 滞回重置；每 5 分钟） | `live.monitor.*` |
+| **影子实盘：EOD 落库+Alpha** | `shadow_broker --ledger/--review`（真实收盘重估净值；Alpha=影子日收益−沪深300；熔断继承 risk_control） | `data/live/*.csv` + `live.schedule.*` |
 
 审计执行：`python3 scripts/risk_control.py --audit` → `reports/risk_audit_<date>.md`
 赛马回测：`python3 scripts/ensemble_engine.py --daily --replay 20` → `reports/ensemble_<date>.md`
 因子兜底自检：`python3 scripts/factor_mining.py --test`；推链路自检：`python3 scripts/push_notification.py --test`
 黑天鹅拷问：`python3 scripts/crash_test.py` → `reports/crash_test_<date>.md`（先 `python3 scripts/factor_mining.py --audit` 验因子常识）
 每组寻优：`python3 scripts/optimizer.py --ensemble` → `reports/optimizer_ensemble_<date>.md`
-验收自检：`python3 scripts/validate_sim.py`（T-Fin03/04 合并）+ `test_sim.py`（T-Fin01/02 回归）
+影子实盘一日回放：`bash scripts/run_live_day.sh --replay`（08:45 预案→09:30 真实时价撮合→15:05 EOD→15:10 复盘）；详篇 `docs/shadow_live.md`
+验收自检：`python3 scripts/validate_sim.py`（T-Fin03/04/05 合并）+ `test_sim.py`（T-Fin01/02 回归）
 
 详见 `docs/ensemble_and_factor.md`。
 

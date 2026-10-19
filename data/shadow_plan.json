@@ -1,0 +1,52 @@
+{
+ "prev_date": "2026-10-19",
+ "light": "red",
+ "gate_extras": {
+  "newest": 0.000944,
+  "worst5": -0.01211,
+  "hi60": 4.801,
+  "latest": 4.24,
+  "recovered": false
+ },
+ "defense": true,
+ "defense_reason": "灯色防守",
+ "prev_sig": {
+  "A": {
+   "510300": 0.0,
+   "159915": 0.0,
+   "513500": 1.0,
+   "518880": 0.0
+  },
+  "B": {
+   "510300": 1.0,
+   "159915": 1.0,
+   "513500": 0.0,
+   "518880": 0.0
+  }
+ },
+ "core": [
+  "510300",
+  "159915",
+  "513500",
+  "518880"
+ ],
+ "race_pending": true,
+ "target_weights": {
+  "weight_a": 0.45,
+  "weight_b": 0.45,
+  "c_buffer": 0.1
+ },
+ "trade_date": "2026-10-20",
+ "mode": {
+  "date": "2026-10-20",
+  "mode": "live",
+  "reason": "",
+  "ts": "2026-10-20 04:27:37"
+ },
+ "engine_gate": {
+  "date": "2026-10-19",
+  "defense": true,
+  "light": "red",
+  "crash_gate": true
+ }
+}

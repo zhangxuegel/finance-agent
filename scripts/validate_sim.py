@@ -162,6 +162,36 @@ c2 = eng2.run()["curve"]
 check("V8 窗口重放确定性（两次独立运行曲线一致）", c1 == c2,
       f"{len(c1)} 天尾值 {c1[-1][1] if c1 else '-'}")
 
+# ------------------------------------------------------------- V9 影子引擎门禁
+try:
+    import io, contextlib
+    import shadow_broker as _sb
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        rc = _sb.self_test()
+    check("V9a 影子撮合自测（时间锁/跌停拦截/降级/落库）", rc == 0,
+          f"rc={rc}")
+except Exception as e:  # noqa: BLE001
+    check("V9a 影子撮合自测", False, f"{type(e).__name__}: {e}")
+try:
+    import datetime as _dt
+    import live_data_feed as _lf  # noqa: F401（确保依赖可用）
+    tk = (_sb.clock_ok(_dt.datetime(2026, 10, 20, 9, 31), False) is True
+          and _sb.clock_ok(_dt.datetime(2026, 10, 20, 9, 20), False) is False
+          and _sb.clock_ok(_dt.datetime(2026, 10, 20, 15, 1), False) is False
+          and _sb.clock_ok(_dt.datetime(2026, 10, 20, 9, 31), True) is True)
+    check("V9b 实盘时间锁守卫（09:31放 / 09:20拒 / 15:01拒 / replay豁免）", tk)
+except Exception as e:  # noqa: BLE001
+    check("V9b 实盘时间锁守卫", False, f"{type(e).__name__}: {e}")
+try:
+    p9 = portfolio.load_params()
+    check("V9c live.* 台账登记（心跳180s/监控-2%/调度三点）",
+          p9["live"]["max_quote_delay_sec"] == 180
+          and p9["live"]["monitor"]["bench_drop"] == -0.02
+          and p9["live"]["schedule"]["match"].endswith("* * 1-5"))
+except Exception as e:  # noqa: BLE001
+    check("V9c live.* 台账登记", False, f"{type(e).__name__}: {e}")
+
 # -------------------------------------------------------------
 print("=" * 50)
 if FAILS:

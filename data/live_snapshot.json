@@ -1,0 +1,81 @@
+{
+ "ts": "2026-10-20 02:56:13",
+ "stage": "heartbeat",
+ "session_day": "2026-10-19",
+ "replay": true,
+ "quotes": {
+  "159915": {
+   "symbol": "sz159915",
+   "name": "创业板ETF易方达",
+   "code": "159915",
+   "last": 2.762,
+   "prev_close": 2.789,
+   "open": 2.772,
+   "volume": 25255276.0,
+   "high": 2.789,
+   "low": 2.727,
+   "pct": -0.97,
+   "ts": "2026-10-19 16:14:42",
+   "source": "tencent"
+  },
+  "510300": {
+   "symbol": "sh510300",
+   "name": "沪深300ETF华泰柏瑞",
+   "code": "510300",
+   "last": 4.24,
+   "prev_close": 4.236,
+   "open": 4.224,
+   "volume": 12105648.0,
+   "high": 4.267,
+   "low": 4.22,
+   "pct": 0.09,
+   "ts": "2026-10-19 16:14:39",
+   "source": "tencent"
+  },
+  "511990": {
+   "symbol": "sh511990",
+   "name": "华宝添益ETF",
+   "code": "511990",
+   "last": 99.999,
+   "prev_close": 100.014,
+   "open": 100.001,
+   "volume": 1232253.0,
+   "high": 100.004,
+   "low": 99.998,
+   "pct": -0.01,
+   "ts": "2026-10-19 16:14:51",
+   "source": "tencent"
+  },
+  "513500": {
+   "symbol": "sh513500",
+   "name": "标普500ETF博时",
+   "code": "513500",
+   "last": 2.677,
+   "prev_close": 2.679,
+   "open": 2.663,
+   "volume": 1000913.0,
+   "high": 2.679,
+   "low": 2.65,
+   "pct": -0.07,
+   "ts": "2026-10-19 16:14:33",
+   "source": "tencent"
+  },
+  "518880": {
+   "symbol": "sh518880",
+   "name": "黄金ETF华安",
+   "code": "518880",
+   "last": 8.553,
+   "prev_close": 8.554,
+   "open": 8.53,
+   "volume": 2851998.0,
+   "high": 8.564,
+   "low": 8.53,
+   "pct": -0.01,
+   "ts": "2026-10-19 16:15:00",
+   "source": "tencent"
+  }
+ },
+ "miss": [],
+ "stale": [],
+ "fresh": true
+}

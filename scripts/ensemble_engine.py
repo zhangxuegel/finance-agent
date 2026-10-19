@@ -343,6 +343,33 @@ class EnsembleEngine:
         return {"weight_a": round((1 - st["c_buffer"]) * st["weight_a"], 4),
                 "weight_b": round(wb, 4), "c_buffer": st["c_buffer"]}
 
+    # ---- 急跌门共享判定（run() 与 export_plan() 同式，防漂移）----
+    def gate_extras(self, i: int) -> dict:
+        """急跌门判定所需的 ＜全部 ≤ dates[i-1] 收盘的确定量＞（无未来函数）。"""
+        cg = self.params["ensemble"].get("crash_gate", {})
+        cg_drop = float(cg.get("drop_threshold", 0.03))
+        prev_rets = []
+        for j in range(max(1, i - 5), i):
+            d0, d1 = self.bench.get(self.dates[j - 1]), self.bench.get(self.dates[j])
+            if d0 and d1:
+                prev_rets.append(d1 / d0 - 1)
+        newest = prev_rets[-1] if prev_rets else 0.0
+        worst5 = min(prev_rets[-5:], default=0.0)
+        w_close = [self.bench[d] for d in self.dates[max(1, i - 60):i]
+                   if d in self.bench]
+        hi60 = max(w_close, default=0.0)
+        latest = self.bench.get(self.dates[i - 1], 0.0) if i > 0 else 0.0
+        ratio = float(cg.get("reentry_ratio", 0.99))
+        recovered = bool(hi60 and latest >= ratio * hi60)
+        light = self.light_at(i) if i > 0 else None
+        return {"cg": cg, "cg_on": bool(cg.get("enable")),
+                "cg_drop": cg_drop, "newest": newest, "worst5": worst5,
+                "hi60": hi60, "latest": latest, "recovered": recovered,
+                "light_state": light["state"] if light else "green",
+                "calm_exit": (light is not None
+                              and light["state"] == "green"
+                              and worst5 > -cg_drop and recovered)}
+
     # ---- 主循环 ----
     def run(self, tail_days: int = 20, allow_llm: bool = False) -> dict:
         p = self.params
@@ -379,30 +406,17 @@ class EnsembleEngine:
             light = self.light_at(i)
             money_mode = light["state"] != "green" or self.flat_legs(i)
             # 急跌熔断门（台账 ensemble.crash_gate），出闸三条件（全确定量、仅用 t-1 收盘）：
-            #   ① 灯回绿（close×MA60×MA120）
-            #   ② 近5日无 ≤-drop 急跌（反绿闪）
+            #   ① 灯回绿（close×MA60×MA120）  ② 近5日无 ≤-drop 急跌（反绿闪）
             #   ③ 高点回归：最新收盘 ≥ 60日高点×reentry_ratio（防 V 反弹悬空绿灯）
-            prev_rets = []
-            for j in range(max(1, i - 5), i):
-                d0, d1 = self.bench.get(self.dates[j - 1]), self.bench.get(self.dates[j])
-                if d0 and d1:
-                    prev_rets.append(d1 / d0 - 1)
-            newest = prev_rets[-1] if prev_rets else 0.0
-            worst5 = min(prev_rets[-5:], default=0.0)
-            if cg_on:
-                if newest <= -cg_drop:
-                    crash_until = i + max(1, int(cg.get("hold_days", 3)))
-                w_close = [self.bench[d] for d in self.dates[max(1, i - 60):i]
-                           if d in self.bench]
-                hi60 = max(w_close, default=0.0)
-                latest = self.bench.get(self.dates[i - 1], 0.0)
-                recovered = bool(hi60 and latest >= cg_reentry_ratio * hi60)
-                calm_exit = light["state"] == "green" and worst5 > -cg_drop and recovered
-                # 出闸三条件常设生效：其一不满足 → 即便计时器已过仍全面防守
-                crashed = not calm_exit
-                gate_mode = money_mode or crashed
-            else:
-                gate_mode = money_mode
+            gx = self.gate_extras(i)
+            newest, worst5 = gx["newest"], gx["worst5"]
+            cg_drop = gx["cg_drop"]
+            if gx["cg_on"] and newest <= -cg_drop:
+                crash_until = i + max(1, int(gx["cg"].get("hold_days", 3)))
+            calm_exit = gx["calm_exit"]
+            # 出闸三条件常设生效：其一不满足 → 即便计时器已过仍全面防守
+            crashed = gx["cg_on"] and not calm_exit
+            gate_mode = money_mode or crashed
             was_defense = _prev_defense   # 上一交易日的 gate_mode（切换检测）
             _prev_defense = gate_mode
             day_price = {c: self.by_date[c][date] for c in self.core}
@@ -516,9 +530,42 @@ class EnsembleEngine:
                 st["locked_until"] = i + p["risk"]["lock_days"]
                 st["alarms"].append({"date": date, "type": "breaker",
                                      "reason": chk["reason"]})
+            # T-Fin05：给影子引擎的当日防守状态（收盘口径）——
+            # "signal-only-after-close"：该状态供次日开盘 plan 使用
+            st["gate_state"] = {"date": date, "defense": bool(gate_mode),
+                                "light": light["state"],
+                                "crash_gate": gx["cg_on"]}
             st["last_date"] = date
             week_prev = iso
         return st
+
+    # ---- T-Fin05 影子引擎接口 ----
+    def export_plan(self) -> dict:
+        """导出"下一交易日开盘"的决策输入（铁律：只用 ≤ 台账最后一日的
+        数据，绝不引用当日盘中信息；成交与否由影子撮合按真实开盘价执行）。"""
+        i = len(self.dates)                     # "下一交易日"的虚拟索引
+        prev = self.dates[-1]
+        light = self.light_at(i)
+        gx = self.gate_extras(i)
+        money_mode = light["state"] != "green" or self.flat_legs(i)
+        crashed = gx["cg_on"] and not gx["calm_exit"]
+        prev_sig = {leg: {c: self.legs[leg][c][prev] for c in self.core}
+                    for leg in ("A", "B")}
+        reason = ("灯色防守" if light["state"] != "green" else
+                  "双空仓" if self.flat_legs(i) else
+                  "急跌熔断门(出闸三条件未满)" if crashed else "正常")
+        return {"prev_date": prev, "light": light["state"],
+                "gate_extras": {k: round(gx[k], 6) if isinstance(gx[k], float)
+                                else gx[k] for k in ("newest", "worst5",
+                                                     "hi60", "latest",
+                                                     "recovered")},
+                "defense": bool(money_mode or crashed),
+                "defense_reason": "灯色防守" if money_mode and not self.flat_legs(i)
+                and light["state"] != "green" else
+                ("双空仓" if self.flat_legs(i)
+                 else "急跌熔断门(出闸三条件未满足)" if crashed else reason),
+                "prev_sig": prev_sig,
+                "core": list(self.core)}
 
 
 # ---------------------------------------------------------------------------

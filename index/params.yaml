@@ -112,3 +112,22 @@ factor:
   # 用基准收盘价在近 250 日中的分位（0~1）替代，来源=行情 CSV 确定性计算。
   valuation_window: 250
   news_max: 12                  # 每次喂给 GLM 的新闻条数上限（新浪财经快讯，免Token）
+
+# ===================== T-Fin05 影子实盘（登记台账） =====================
+live:
+  data_dir: data/live          # 影子台账 CSV（=正式台账 CSV + 逐日真实 EOD 增量）
+  db: data/shadow_live.db      # sqlite3：fills/eod/events 三表
+  state: data/shadow_state.json
+  max_quote_delay_sec: 180     # 心跳红线：行情时戳延迟 >180s → 报警+当日降级
+  heartbeat_times: ["09:25", "14:55"]
+  benchmark_index: sh000300    # 沪深300 指数（东财 secid 1.000300）；Alpha 基准
+  monitor:
+    bench_drop: -0.02          # 指数盘中 ≤ -2% → 立即紧急 webhook（不等收盘）
+    rearm_pct: -0.01           # 滞回：回升 ≥ -1% 才重新武装报警
+    interval_sec: 300          # 09:30-15:00 每 5 分钟一轮
+  schedule:
+    plan_push: "45 8 * * 1-5"       # 08:45 预案推送
+    match: "30 9 * * 1-5"           # 09:30 开盘撮合（真实时价）
+    ledger: "5 15 * * 1-5"          # 15:05 收盘落库（真实 EOD）
+    review_push: "10 15 * * 1-5"    # 15:10 成交复盘推送
+  limit_down_rule: "开盘价 ≤ 昨收×0.90(+0.002 容差) → 当日禁买该标的（不伪造流动性）"
