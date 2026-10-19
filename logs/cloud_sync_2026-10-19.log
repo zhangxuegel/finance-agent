@@ -1,0 +1,3 @@
+=== 2026-10-19 22:12:52 未配置 SUPABASE_URL/KEY —— 本地不受影响，云端未同步 ===
+[sync] 本地读数 ok：待推 eod=1 fills=0
+[sync] 未配置 SUPABASE_URL（本地不受影响）；云端配置见 README_DEPLOY.md 第 1 步

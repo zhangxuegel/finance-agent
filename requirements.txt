@@ -1,0 +1,7 @@
+# T-Fin07 云端看板依赖（仅 Streamlit Cloud 运行 dashboard_cloud.py 用）
+# 本地 Termux 模拟盘不安装这些（铁律：本地与云端完全隔离）
+streamlit>=1.36
+supabase>=2.4
+pandas>=2.0
+plotly>=5.20
+requests>=2.31

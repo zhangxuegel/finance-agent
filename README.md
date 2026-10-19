@@ -89,6 +89,9 @@ data/live/*.csv            影子台账行情（正式台账 CSV + 逐日真实 
 | **连续追踪看板** | `dashboard.py`（Flask+纯SVG：指标卡/A·B·C持仓饼图/影子vs沪深300净值曲线+台账基准虚线/近20笔流水；只读不写台账） | `live.dashboard_port` |
 | **人工干预物理开关** | `kill_switch.py --panic/--release`（A/B 台账真实价强平 + `PANIC_LOCK.flag`；run_live_day 与 match 首行全局拦截；DB 只增不改不删） | `PANIC_LOCK.flag` |
 | **连续追踪聚合+胜率热力图** | `aggregate_performance.py`（10 日 A/B × 黄/绿灯 局部胜率，红灯剔除；连跌/连涨、Alpha 合计、PANIC 状态尾注） | `reports/aggregate_<date>.md` |
+| **云端增量同步** | `sync_to_cloud.py`（SQLite→Supabase REST upsert；水位 data/cloud_sync_state.json 断点续传；云端故障不碰本地） | `SUPABASE_URL/KEY` + README_DEPLOY.md |
+| **云端原生看板** | `dashboard_cloud.py`（Streamlit：指标卡/影子vs沪深300折线/近20笔流水；只读云端库） | `.streamlit/config.toml`(暗黑) + `requirements.txt` |
+| **云端部署** | `README_DEPLOY.md`（建表 SQL→secrets→share.streamlit.io 三步）+ `sync_all.sh` 一键增量推送 | `.streamlit/secrets.toml.example` |
 
 审计执行：`python3 scripts/risk_control.py --audit` → `reports/risk_audit_<date>.md`
 赛马回测：`python3 scripts/ensemble_engine.py --daily --replay 20` → `reports/ensemble_<date>.md`
@@ -98,7 +101,8 @@ data/live/*.csv            影子台账行情（正式台账 CSV + 逐日真实 
 影子实盘一日回放：`bash scripts/run_live_day.sh --replay`（08:45 预案→09:30 真实时价撮合→15:05 EOD→15:10 复盘→15:15 聚合热力图）；详篇 `docs/shadow_live.md`
 本地看板：`python3 scripts/dashboard.py --port 8501` → `http://127.0.0.1:8501`（Termux 浏览器打开；静态快照 `reports/dashboard_snapshot_<date>.html`）
 紧急制动：`python3 scripts/kill_switch.py --panic "原因"` → 全局停牌（`PANIC_LOCK.flag`）；`--release` 解锁；`--status` 查询
-验收自检：`python3 scripts/validate_sim.py`（V1–V10）+ `test_sim.py`（T-Fin01/02 回归）
+云端看板：`bash sync_all.sh`（增量推送）→ 部署法见 `README_DEPLOY.md`（Supabase 建表 SQL + share.streamlit.io 三步上线）
+验收自检：`python3 scripts/validate_sim.py`（V1–V11）+ `test_sim.py`（T-Fin01/02 回归）
 
 详见 `docs/ensemble_and_factor.md`。
 

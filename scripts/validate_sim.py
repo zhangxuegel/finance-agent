@@ -238,6 +238,56 @@ try:
 except Exception as e:  # noqa: BLE001
     check("V10c 物理开关全周期", False, f"{type(e).__name__}: {e}")
 
+# ------------------------------------------------------------- V11 云端链路
+try:
+    import sync_to_cloud as _sc
+    st0 = {"max_eod_date": "2026-10-19", "max_fill_id": 7}
+    raw = {("sb_shadow_eod"): [
+        {"trade_date": "2026-10-19", "nav": 976273.3},
+        {"trade_date": "2026-10-20", "nav": 975900.0},
+        {"trade_date": "2026-10-21", "nav": 977000.0}]}
+    rows_new = [r for r in raw["sb_shadow_eod"]
+                if r["trade_date"] > st0["max_eod_date"]]
+    st1 = _sc.advance_watermark(
+        {"sb_shadow_eod": rows_new, "sb_shadow_fills": []}, dict(st0))
+    check("V11a 增量水位（新行才算+水位推进+重放=空集）",
+          len(rows_new) == 2 and st1["max_eod_date"] == "2026-10-21"
+          and not [r for r in raw["sb_shadow_eod"]
+                   if r["trade_date"] > st1["max_eod_date"]])
+except Exception as e:  # noqa: BLE001
+    check("V11a 增量水位", False, f"{type(e).__name__}: {e}")
+try:
+    import dashboard_cloud as _dc
+    m = _dc.compute_metrics([
+        {"nav": 100, "alpha": 0.001, "bench_index_close": 4000},
+        {"nav": 102, "alpha": 0.001, "bench_index_close": 4030},
+        {"nav": 101, "alpha": -0.0002, "bench_index_close": 3990}])
+    check("V11b 云端看板纯函数（指标不依赖streamlit）",
+          abs(m["cum"] - 0.01) < 1e-9 and m["mdd"] > 0 and m["days"] == 3,
+          f"cum={m['cum']:.3f}")
+    df = _dc.normalize([{"trade_date": "d", "nav": 100,
+                         "bench_index_close": 4000},
+                        {"trade_date": "d2", "nav": 101,
+                         "bench_index_close": 4080}])
+    rows = (df.to_dict("records") if _dc.pd else df)
+    check("V11b2 归一化曲线", abs(rows[-1]["影子净值"] - 1.01) < 1e-9
+          and abs(rows[-1]["沪深300"] - 1.02) < 1e-9)
+except Exception as e:  # noqa: BLE001
+    check("V11b 云端看板纯函数", False, f"{type(e).__name__}: {e}")
+try:
+    ROOT2 = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    def _rf(rel):
+        return os.path.exists(os.path.join(ROOT2, rel))
+    check("V11c 云端基建齐备（requirements/config/secrets样例/部署文档）",
+          all(_rf(p) for p in ("requirements.txt", ".streamlit/config.toml",
+                               ".streamlit/secrets.toml.example",
+                               "README_DEPLOY.md", "sync_all.sh")))
+    check("V11c2 secrets 真文件不入库（.gitignore 覆盖）",
+          ".streamlit/secrets.toml" in open(
+              os.path.join(ROOT2, ".gitignore"), encoding="utf-8").read())
+except Exception as e:  # noqa: BLE001
+    check("V11c 云端基建", False, f"{type(e).__name__}: {e}")
+
 # -------------------------------------------------------------
 print("=" * 50)
 if FAILS:

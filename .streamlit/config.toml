@@ -1,0 +1,14 @@
+# T-Fin06：Streamlit 云端看板主题 —— 暗黑模式（护眼 + 专业）
+[theme]
+base = "dark"
+primaryColor = "#4aa3df"
+backgroundColor = "#0e1720"
+secondaryBackgroundColor = "#152232"
+textColor = "#dbe4ef"
+font = "sans serif"
+
+[server]
+headless = true
+
+[browser]
+gatherUsageStats = false
