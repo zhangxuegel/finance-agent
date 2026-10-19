@@ -1,0 +1,15 @@
+{
+  "engine": "A",
+  "params": {
+    "ma_fast": 5,
+    "ma_slow": 20
+  },
+  "train_sharpe": 1.472,
+  "train_total": 0.5639,
+  "train_mdd": 0.0973,
+  "oos_sharpe": -0.523,
+  "oos_total": -0.0306,
+  "oos_mdd": 0.0926,
+  "confidence": "low",
+  "note": "OOS 夏普崩塌，系统已拦截（防过拟合）"
+}

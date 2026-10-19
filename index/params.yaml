@@ -1,0 +1,104 @@
+# ============================================================================
+# T-Fin01 核心台账 —— 本金 / 费率 / 策略 / 风控 参数（唯一真源）
+# 任何脚本要用这些参数只能从这里读；新增参数必须登记"来源"，
+# 来源不明的参数视为幻觉数据，禁止使用。
+# ============================================================================
+
+account:
+  initial_capital: 1000000     # 模拟盘初始资金（元）。铁律：禁止接实盘
+  currency: CNY
+
+fees:
+  # 来源：A 股 ETF 券商公开费率惯例（万分之0.5~3 不等），取保守值万一2
+  commission_bps: 2            # 买卖双边的佣金，万分之二（0.02%）
+  commission_min: 5.0          # 单笔最低佣金（元）
+  # 来源：财放税规——场内 ETF 交易免征印花税；股票为卖出千分之一
+  stamp_duty_bps: 0            # ETF 卖出印花税=0；若改做个股须改 100
+  # 来源：买卖价差与冲击成本的经验预估（保守取万一）
+  slippage_bps: 1              # 撮合时按方向不利侧外加的滑点
+
+trading_rule:
+  settle: next_open            # 信号日收盘生成指令 → 次日开盘价撮合
+  lot: 100                     # A 股整手（100 股/手）
+
+strategy:
+  # engine: A = 双均线趋势追踪；B = 布林带均值回归
+  engine: A
+  A:
+    ma_fast: 5                 # 快均线周期
+    ma_slow: 20                # 慢均线周期
+  B:
+    window: 20                 # 布林带均线窗口
+    n_std: 2.0                 # 标准差倍数
+    exit: mid                  # 触中轨离场（可选 "mid"）
+
+positions:
+  # 目标权重：持仓时等权分配，1/n_assets（由脚本按 watchlist 求倒数）
+  target_weight: 0.25          # 登记参考值 = 1 / 当前资产数（watchlist）
+
+risk:
+  # 两条绝对熔断规则（任何脚本不得修改或绕过）
+  daily_loss_cutoff: 0.03      # 单日净值亏损 > 3% → 强制清仓
+  max_drawdown_cutoff: 0.10    # 净值自最高点回撤 > 10% → 强制清仓
+  lock_days: 3                 # 熔断后锁仓 3 个交易日（禁止一切买卖）
+
+benchmark:
+  code: "510300"
+  secid: "1.510300"
+  name: 沪深300ETF（业绩基准）
+
+llm:
+  # LLM 只做复盘分析（策略分析师/风控官），不参与任何买卖决策
+  base_url: https://open.bigmodel.cn/api/paas/v4
+  model: glm-4-flash
+  api_key_env: GLM_API_KEY     # 无此环境变量时,报告自动降级为"规则点评"
+
+stress:
+  # ---- T-Fin02 新增（登记台账）----
+  # 高滑点地狱模式：滑点×N 倍重放全历史，检验流动性冲击下策略生存能力
+  slippage_multiplier: 10
+  # 防未来函数审计的探针日数量（截断重算法抽样密度）
+  lookahead_probes: 40
+
+ensemble:
+  # ---- T-Fin03 新增（登记台账）----
+  A:
+    ma_fast: 20                # 任务书：MA20 上穿 MA60
+    ma_slow: 60
+  B:
+    rsi_period: 14             # RSI14 < 30 买 / > 70 卖
+    rsi_buy: 30
+    rsi_sell: 70
+  C:
+    code: "511990"             # 货币 ETF（银华日利），黄/红灯或 A/B 双空仓时承接资金
+    secid: "1.511990"
+    name: 银华日利货币ETF
+  race:
+    lookback: 20               # 每周末用过去 20 个交易日各策略夏普赛马
+    winner_share: 0.7          # 胜者 7 / 败者 3
+    loser_share: 0.3
+    max_weekly_shift: 0.2      # 平滑防过拟合：单周权重漂移上限 ±20pp（禁 0→100%）
+    min_weight: 0.3            # 双方权重下限（拒绝 0:10 绝对押注）
+  tilt:
+    score_high: 80             # LLM 市场信心 >80 → 策略 A 加权
+    a_tilt_pp: 0.05
+    score_low: 20              # <20 → 策略 C（货币腿）加权
+    c_tilt_pp: 0.10
+    warmup_fixed_share: 0.5    # 赛马数据未满 20 日前固定 5:5
+
+push:
+  webhook_url_env: FIN_PUSH_URL # 真实群 URL 仅从环境变量读；本地/测试一律走 loopback mock
+  allow_remote_env: FIN_PUSH_ALLOW
+
+cron:
+  schedule: "30 15 * * 1-5"     # A股收盘后 15:30 交易日自动执行
+  runner: scripts/run_daily_all.sh
+
+factor:
+  # ---- T-Fin03 新增（登记台账）----
+  momentum_window: 20           # 动量 = 近20日涨幅
+  atr_period: 14                # 波动率 = ATR14（Wilder）
+  # 估值因子替代口径声明：ETF 无市盈率台账，禁用幻觉 PE。
+  # 用基准收盘价在近 250 日中的分位（0~1）替代，来源=行情 CSV 确定性计算。
+  valuation_window: 250
+  news_max: 12                  # 每次喂给 GLM 的新闻条数上限（新浪财经快讯，免Token）
