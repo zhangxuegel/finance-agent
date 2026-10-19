@@ -180,5 +180,192 @@ def run():
     return best
 
 
+# ---------------------------------------------------------------------------
+# T-Fin04 模块 1：赛马参数网格寻优（红线继承：熔断不可优化，MDD≤12% 绝对上限）
+# 小范围网格：平滑带 × 权重下限 × A双均线 × B RSI → 16 组（台账登记搜索半径）
+def _ensemble_combos():
+    combos = []
+    for shift in (0.10, 0.20):                     # race.max_weekly_shift
+        for minw in (0.30, 0.40):                  # race.min_weight
+            for a in ((20, 60), (10, 60)):         # A: (ma_fast, ma_slow)
+                for b in ((30, 70), (25, 75)):     # B: (rsi_buy, rsi_sell)
+                    combos.append({("race", "max_weekly_shift"): shift,
+                                   ("race", "min_weight"): minw,
+                                   ("A", "ma_fast"): a[0],
+                                   ("A", "ma_slow"): a[1],
+                                   ("B", "rsi_buy"): b[0],
+                                   ("B", "rsi_sell"): b[1]})
+    return combos
+
+
+ENSEMBLE_OOS_DAYS = 63          # 样本外=最后约 3 个月（未参与训练）
+ENSEMBLE_MDD_CAP = 0.12         # 绝对红线：全历史 MDD 不得超过
+ENSEMBLE_SUGGEST = os.path.join(ROOT, "index", "ensemble_suggested.json")
+REPORT_DIR = os.path.join(ROOT, "reports")
+
+
+def _seg(curve, lo, hi):
+    v = [e for _, e in curve[lo:hi]]
+    if len(v) < 3:
+        return None
+    rets = [v[i] / v[i - 1] - 1 for i in range(1, len(v))]
+    m = sum(rets) / len(rets)
+    sd = (sum((x - m) ** 2 for x in rets) / (len(rets) - 1)) ** 0.5
+    peak = m = 0.0
+    peak, mdd = v[0], 0.0
+    for x in v:
+        peak = max(peak, x)
+        mdd = max(mdd, 1 - x / peak) if peak else 0
+    ann_vol = sd * 244 ** 0.5
+    return {"total": v[-1] / v[0] - 1,
+            "sharpe": round(((m * 244) - portfolio.RISK_FREE) / ann_vol, 3)
+                      if ann_vol else None,
+            "mdd": round(mdd, 4)}
+
+
+def _full_metrics(st):
+    pseudo = {"cash": 0.0, "positions": {}, "curve": st["curve"],
+              "trades": st["trades"]}
+    return portfolio.metrics(pseudo, 1_000_000.0)
+
+
+def run_ensemble(verbose: bool = True) -> dict:
+    """赛马网格寻优：训练=去掉最后 3 个月，OOS=最后 3 个月。
+    红线：① 全历史 MDD > 12% → 直接淘汰；② OOS 夏普较训练期崩塌超 50%
+    （或 OOS≤0）→ 拦截并降级 confidence。确定性回放（因子走规则分）。"""
+    import ensemble_engine as ee
+    combos = _ensemble_combos()
+    results = []
+    n = len(combos)
+    for gi, overrides in enumerate(combos, 1):
+        eng_ = ee.EnsembleEngine(param_overrides=overrides, log_writes=False)
+        st = eng_.run()
+        curve = st["curve"]
+        split = max(3, len(curve) - ENSEMBLE_OOS_DAYS)
+        full = _full_metrics(st)
+        tr, oo = _seg(curve, 0, split), _seg(curve, split, len(curve))
+        row = {"params": _pretty(overrides),
+               "full_mdd": full["mdd"], "full_sharpe": full["sharpe"],
+               "full_nav": round(full["nav"], 2),
+               "train_sharpe": tr and tr["sharpe"], "train_total": tr and round(tr["total"], 4),
+               "oos_sharpe": oo and oo["sharpe"], "oos_total": oo and round(oo["total"], 4),
+               "oos_mdd": oo and oo["mdd"], "_ov": overrides}
+        crash = (row["oos_sharpe"] is None or (row["train_sharpe"] or 0) > 0
+                 and (row["oos_sharpe"] or 0) < 0.5 * row["train_sharpe"])
+        row["oos_crash"] = bool(crash)
+        mdd_violation = full["mdd"] > ENSEMBLE_MDD_CAP
+        row["rejected_mdd"] = bool(mdd_violation)
+        results.append(row)
+        if verbose:
+            print(f"[opt-e] {gi}/{n} {json.dumps(row['params'], ensure_ascii=False)} "
+                  f"MDD={full['mdd'] * 100:.2f}% train={row['train_sharpe']} "
+                  f"oos={row['oos_sharpe']} {'❌MDD红线' if mdd_violation else ''}"
+                  f"{'⚠崩塌' if crash else ''}")
+    assert results, "网格搜索无结果"
+    ok = [r for r in results if not r["rejected_mdd"]]
+    assert ok, f"全部候选触发 MDD≤{ENSEMBLE_MDD_CAP:.0%} 红线 → 不允许产出建议"
+    # 基线（T-Fin03 默认参数）
+    eng0 = ee.EnsembleEngine(log_writes=False)
+    st0 = eng0.run()
+    base_split = max(3, len(st0["curve"]) - ENSEMBLE_OOS_DAYS)
+    base_full = _full_metrics(st0)
+    base = {"params": "默认(T-Fin03)", "full_mdd": base_full["mdd"],
+            "full_sharpe": base_full["sharpe"], "full_nav": round(base_full["nav"], 2),
+            "train_sharpe": _seg(st0["curve"], 0, base_split)["sharpe"],
+            "oos_sharpe": _seg(st0["curve"], base_split, len(st0["curve"]))["sharpe"],
+            "_ov": {}}
+    # 排序：OOS 夏普优先（样本外才是真实目标），同则 train
+    ok.sort(key=lambda r: ((r["oos_sharpe"] if r["oos_sharpe"] is not None else -9),
+                           (r["train_sharpe"] or -9)), reverse=True)
+    best = ok[0]
+    intercept = best["oos_crash"] or (best["oos_sharpe"] or -9) <= 0
+    best["confidence"] = "low" if intercept else "high"
+    best["note"] = ("OOS 夏普崩塌>50% 或 ≤0 → 系统已拦截（防过拟合）" if intercept
+                    else "训练/样本外夏普同向通过（无过拟合迹象）")
+    out = {"date": _today(), "baseline": _clean(base),
+           "best": _clean(best), "mdd_cap": ENSEMBLE_MDD_CAP,
+           "oos_days": ENSEMBLE_OOS_DAYS, "grid_size": n,
+           "rejected_mdd_n": sum(r["rejected_mdd"] for r in results),
+           "all_rows": [_clean(r) for r in ok[:6]]}
+    with open(ENSEMBLE_SUGGEST, "w", encoding="utf-8") as f:
+        json.dump(out, f, ensure_ascii=False, indent=2)
+    with open(LOG_PATH, "a", encoding="utf-8") as f:
+        f.write(json.dumps({"date": _today(), "type": "ensemble_grid",
+                            "best": _clean(best), "baseline": _clean(base)},
+                           ensure_ascii=False) + "\n")
+    _report_ensemble_opt(out)
+    if verbose:
+        print(f"\n[opt-e] 基线  全程夏普 {base['full_sharpe']} · MDD {base['full_mdd'] * 100:.2f}%"
+              f" · OOS {base['oos_sharpe']}")
+        print(f"[opt-e] 最优  {json.dumps(best['params'], ensure_ascii=False)}")
+        print(f"[opt-e] 全程夏普 {best['full_sharpe']} · MDD {best['full_mdd'] * 100:.2f}%"
+              f" · OOS {best['oos_sharpe']} · confidence: {best['confidence']}")
+        print(f"[opt-e] {best['note']}")
+        print(f"[opt-e] 台账：{ENSEMBLE_SUGGEST} · {LOG_PATH}")
+    return out
+
+
+def _pretty(ov):
+    return {f"{a}.{b}": v for (a, b), v in ov.items()}
+
+
+def _clean(row):
+    r = {k: v for k, v in row.items() if not k.startswith("_")}
+    if isinstance(r.get("params"), dict):
+        return r
+    return r
+
+
+def _today():
+    import datetime as _dt
+    return _dt.date.today().isoformat()
+
+
+def _report_ensemble_opt(out: dict) -> str:
+    b, base = out["best"], out["baseline"]
+    path = os.path.join(REPORT_DIR, f"optimizer_ensemble_{out['date']}.md")
+    os.makedirs(REPORT_DIR, exist_ok=True)
+    lines = ["# T-Fin04 · 赛马参数网格寻优（样本外验证报告）", "",
+             f"> 生成 {out['date']} · 网格 {out['grid_size']} 组 · "
+             f"OOS=最后 {out['oos_days']} 交易日（未参与训练）· "
+             f"绝对红线：全历史 MDD ≤ {out['mdd_cap']:.0%}（熔断规则不可被优化）", "",
+             "## 1) 基线（T-Fin03 默认）vs 最优候选", "",
+             "| 口径 | 全程夏普 | 全程MDD | 净值 | 训练夏普 | OOS夏普 | 置信 |",
+             "|---|---|---|---|---|---|---|"]
+    for name, r in (("默认参数", base), ("最优候选", b)):
+        lines.append(f"| {name} | {r['full_sharpe']} | {r['full_mdd'] * 100:.2f}% "
+                     f"| ¥{r['full_nav']:,.0f} | {r['train_sharpe']} "
+                     f"| {r['oos_sharpe']} | {r.get('confidence', '-')} |")
+    lines += ["", f"- 最优参数：`{json.dumps(b['params'], ensure_ascii=False)}`", "",
+              "## 2) 样本外存活者（Top-6，按 OOS 夏普排序）", "",
+              "| 参数 | 全程MDD | 训练夏普 | OOS夏普 | OOS累计 | 判定 |",
+              "|---|---|---|---|---|---|"]
+    for r in out["all_rows"]:
+        tag = ("❌MDD红线" if r["rejected_mdd"] else
+               ("⚠OOS崩塌→拦截" if r["oos_crash"] else "✅通过"))
+        lines.append(f"| `{json.dumps(r['params'], ensure_ascii=False)}` "
+                     f"| {r['full_mdd'] * 100:.2f}% | {r['train_sharpe']} "
+                     f"| {r['oos_sharpe']} | {r['oos_total']} | {tag} |")
+    lines += ["",
+              "## 3) 防过拟合结论", "",
+              f"- MDD 红线淘汰 {out['rejected_mdd_n']} 组；"
+              f"最终置信 **{b['confidence']}**（{b['note']}）",
+              "- 规则：OOS 夏普较训练期下跌超 50% 或 OOS ≤ 0 → 拦截、confidence=low，",
+              "  参数仍写入台账但**不会自动生效**（需 CRO 人工确认后手工改 params.yaml）。",
+              "- 排序依据 OOS 夏普（样本外表现优先于训练集过拟合高分）。", "",
+              "## 4) 台账溯源", "",
+              f"- 建议值：`index/ensemble_suggested.json`；审计流水：`data/optimizer_log.jsonl`；",
+              "- 网格维度：`race.max_weekly_shift / race.min_weight / A.ma_fast·ma_slow / B.rsi_buy·rsi_sell`",
+              "  定义于 `scripts/optimizer.py ENSEMBLE_GRID`（台账登记小范围搜索，非暴力全域）。",
+              ""]
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines) + "\n")
+    print(f"[opt-e] 报告 → {path}")
+    return path
+
+
 if __name__ == "__main__":
-    run()
+    if "--ensemble" in sys.argv:
+        run_ensemble()
+    else:
+        run()

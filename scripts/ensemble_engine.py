@@ -84,16 +84,20 @@ def signals_rsi(closes: list[float], period: int = 14,
     return out
 
 
-def leg_signals(core_codes: list[str], engine_cfg: dict) -> dict:
-    """预计算全部标的的 A/B 腿信号（只用截至当日的数据，无未来函数）。"""
+def leg_signals(core_codes: list[str], engine_cfg: dict,
+                data_dir: str | None = None) -> dict:
+    """预计算全部标的的 A/B 腿信号，按日期索引（窗口模式安全，无未来函数：
+    每个日期的信号只用该日期及之前的收盘价）。"""
     legs = {"A": {}, "B": {}}
     for code in core_codes:
-        closes = [k["close"] for k in fetch_data.load_csv(code)]
-        legs["A"][code] = strategy.signal_series_a(
-            closes, engine_cfg["A"]["ma_fast"], engine_cfg["A"]["ma_slow"])
-        legs["B"][code] = signals_rsi(closes, engine_cfg["B"]["rsi_period"],
-                                      engine_cfg["B"]["rsi_buy"],
-                                      engine_cfg["B"]["rsi_sell"])
+        kl = fetch_data.load_csv(code, data_dir)
+        dates = [k["date"] for k in kl]
+        closes = [k["close"] for k in kl]
+        legs["A"][code] = dict(zip(dates, strategy.signal_series_a(
+            closes, engine_cfg["A"]["ma_fast"], engine_cfg["A"]["ma_slow"])))
+        legs["B"][code] = dict(zip(dates, signals_rsi(
+            closes, engine_cfg["B"]["rsi_period"],
+            engine_cfg["B"]["rsi_buy"], engine_cfg["B"]["rsi_sell"])))
     return legs
 
 
@@ -150,37 +154,71 @@ def sleeve_sharpe(curve: list, lookback: int = 20) -> float | None:
     return ((m * 244) - portfolio.RISK_FREE) / (sd * 244 ** 0.5)
 
 
-# ---------------------------------------------------------------------------
 class EnsembleEngine:
-    def __init__(self):
+    def __init__(self, param_overrides: dict | None = None,
+                 window: tuple[str, str] | None = None,
+                 data_dir: str | None = None, log_writes: bool = True):
+        """param_overrides：仅覆盖 ensemble.* 叶子参数（optimizer 网格用）。
+        window=(start,end)：窗口重放（crash_test 用；信号与灯色仍用窗口内
+        日期之前的全部历史，保证无未来函数）。data_dir：独立数据目录
+        （如 data/crash 长历史黑天鹅，不污染正式台账）。log_writes=False
+        时不写 data/ensemble_race_log.jsonl（批量寻优/崩溃测试防污染台账）。"""
         self.params = portfolio.load_params()
+        if param_overrides:
+            for k, v in param_overrides.items():
+                node = self.params["ensemble"]
+                sub = k[0]
+                if len(k) == 2 and isinstance(node.get(sub), dict):
+                    node[sub][k[1]] = v
+                else:
+                    raise ValueError(f"非法覆盖键：{k}（只允许 ensemble.<亚层>.<叶子>）")
+        self.window, self.data_dir, self.log_writes = window, data_dir, log_writes
         wl = fetch_data.load_watchlist()
         self.watch = [w for w in wl if not w.get("exclude_core")]
         self.core = [w["code"] for w in self.watch]
         c = self.params["ensemble"]["C"]
         self.money_code = c["code"]
-        self.money_px = {k["date"]: k["close"] for k in fetch_data.load_csv(self.money_code)}
+        self.money_px = {k["date"]: k["close"]
+                         for k in fetch_data.load_csv(self.money_code, data_dir)}
         self.dates = sorted(set.intersection(*[
-            {k["date"] for k in fetch_data.load_csv(code)} for code in self.core]))
-        self.by_date = {c: {k["date"]: k for k in fetch_data.load_csv(c)}
+            {k["date"] for k in fetch_data.load_csv(code, data_dir)}
+            for code in self.core]))
+        if window:
+            self.dates = [d for d in self.dates if window[0] <= d <= window[1]]
+        self.by_date = {c: {k["date"]: k for k in fetch_data.load_csv(c, data_dir)}
                         for c in self.core}
         b = self.params["benchmark"]["code"]
-        self.bench = {k["date"]: k["close"] for k in fetch_data.load_csv(b)}
-        warm = max(self.params["ensemble"]["A"]["ma_slow"],
-                   self.params["ensemble"]["B"]["rsi_period"])
-        self.warmup = max(warm, 2)
-        self.legs = leg_signals(self.core, self.params["ensemble"])
+        self.bench = {k["date"]: k["close"] for k in fetch_data.load_csv(b, data_dir)}
+        # 因子分可用下界：正式台账基准首个有效日（窗口外日期不启用因子倾斜）
+        self.fac_min = fetch_data.load_csv(b)[0]["date"]
+        if window:
+            # 窗口模式：信号已在更长历史上热身，起跑只需赛马回看窗口
+            self.warmup = max(self.params["ensemble"]["race"]["lookback"], 5)
+        else:
+            warm = max(self.params["ensemble"]["A"]["ma_slow"],
+                       self.params["ensemble"]["B"]["rsi_period"])
+            self.warmup = max(warm, 2)
+        self.legs = leg_signals(self.core, self.params["ensemble"], data_dir)
+        self.closes_by_date = {c: {k["date"]: k["close"]
+                                   for k in fetch_data.load_csv(c, data_dir)}
+                               for c in self.core}
         self.params["n_assets"] = len(self.core)
 
     # ---- 组件 ----
     def light_at(self, i: int) -> dict:
-        """研判日 i 的信号灯：只用 ≤ dates[i-1] 的收盘（时间锁口径）。"""
-        closes = [self.bench[d] for d in self.dates[:i] if d in self.bench]
+        """研判日 i 的信号灯：只用 ≤ dates[i-1] 的收盘（时间锁口径）。
+        窗口模式下使用基准 CSV 全历史前缀（窗口起点之前的历史仍生效）。"""
+        if self.window:
+            cut = self.dates[i - 1] if i > 0 else None
+            closes = [v for d, v in self.bench.items() if cut is None or d <= cut]
+        else:
+            closes = [self.bench[d] for d in self.dates[:i] if d in self.bench]
         return regime_filter.traffic_light(closes)
 
     def flat_legs(self, i: int) -> bool:
-        return all(abs(v) < 1e-12 for c in self.core
-                   for v in (self.legs["A"][c][i - 1], self.legs["B"][c][i - 1]))
+        prev = self.dates[i - 1]
+        return all(abs(self.legs[leg][c][prev]) < 1e-12
+                   for c in self.core for leg in ("A", "B"))
 
     def sleeve_params(self) -> dict:
         p = _copy.deepcopy(self.params)
@@ -325,14 +363,51 @@ class EnsembleEngine:
         week_prev = None
         race_pending = None
         sp = self.sleeve_params()
+        cg = self.params["ensemble"].get("crash_gate", {})
+        cg_on = bool(cg.get("enable"))
+        cg_drop = float(cg.get("drop_threshold", 0.03))
+        cg_reentry_days = int(cg.get("reentry_days", 10))
+        cg_reentry_damp = float(cg.get("reentry_damp", 0.5))
+        cg_reentry_ratio = float(cg.get("reentry_ratio", 0.97))
+        crash_until = -1          # 急跌熔断门：保持全面防守直到解除条件满足
+        was_defense = False       # 上一日 gate_mode（防守→正常切换检测）
+        _prev_defense = False
 
         for i in range(self.warmup, len(self.dates)):
             date = self.dates[i]
             iso = datetime.strptime(date, "%Y-%m-%d").isocalendar()[:2]
             light = self.light_at(i)
             money_mode = light["state"] != "green" or self.flat_legs(i)
+            # 急跌熔断门（台账 ensemble.crash_gate），出闸三条件（全确定量、仅用 t-1 收盘）：
+            #   ① 灯回绿（close×MA60×MA120）
+            #   ② 近5日无 ≤-drop 急跌（反绿闪）
+            #   ③ 高点回归：最新收盘 ≥ 60日高点×reentry_ratio（防 V 反弹悬空绿灯）
+            prev_rets = []
+            for j in range(max(1, i - 5), i):
+                d0, d1 = self.bench.get(self.dates[j - 1]), self.bench.get(self.dates[j])
+                if d0 and d1:
+                    prev_rets.append(d1 / d0 - 1)
+            newest = prev_rets[-1] if prev_rets else 0.0
+            worst5 = min(prev_rets[-5:], default=0.0)
+            if cg_on:
+                if newest <= -cg_drop:
+                    crash_until = i + max(1, int(cg.get("hold_days", 3)))
+                w_close = [self.bench[d] for d in self.dates[max(1, i - 60):i]
+                           if d in self.bench]
+                hi60 = max(w_close, default=0.0)
+                latest = self.bench.get(self.dates[i - 1], 0.0)
+                recovered = bool(hi60 and latest >= cg_reentry_ratio * hi60)
+                calm_exit = light["state"] == "green" and worst5 > -cg_drop and recovered
+                # 出闸三条件常设生效：其一不满足 → 即便计时器已过仍全面防守
+                crashed = not calm_exit
+                gate_mode = money_mode or crashed
+            else:
+                gate_mode = money_mode
+            was_defense = _prev_defense   # 上一交易日的 gate_mode（切换检测）
+            _prev_defense = gate_mode
             day_price = {c: self.by_date[c][date] for c in self.core}
-            prev_sig = {leg: {c: self.legs[leg][c][i - 1] for c in self.core}
+            prev_date = self.dates[i - 1]
+            prev_sig = {leg: {c: self.legs[leg][c][prev_date] for c in self.core}
                         for leg in ("A", "B")}
             locked = i <= st["locked_until"]
 
@@ -340,28 +415,51 @@ class EnsembleEngine:
                 # 1) 上周赛马再配置（今日开盘执行）
                 held_money = any(st["money"].get(k, 0) > 0 for k in ("A", "B", "MASTER"))
                 if race_pending is not None:
-                    if not money_mode:
+                    if not gate_mode:
                         if held_money:
                             self.redeem_money(st, date)
                         self.rebalance_sleeves(st, race_pending, date)
                     race_pending = None
                     held_money = any(st["money"].get(k, 0) > 0
                                      for k in ("A", "B", "MASTER"))
-                # 2) 模式切换（黄/红灯 或 A/B 双空仓 ↔ 正常）
-                if money_mode and not held_money and \
-                        any(st["sleeves"][leg]["positions"] for leg in ("A", "B")):
-                    self.clear_sleeves(st, date, "exit→money regime/双空仓")
+                # 2) 模式切换（黄/红/急跌 或 A/B 双空仓 ↔ 正常）
+                if gate_mode and any(st["sleeves"][leg]["positions"]
+                                     for leg in ("A", "B")):
+                    self.clear_sleeves(st, date, "exit→defense regime/急跌/双空仓")
                     assert not any(st["sleeves"][leg]["positions"]
                                    for leg in ("A", "B")), "状态机违规：清仓未完成"
                     self.park_money(st, date)        # 强制转入货币 ETF（开盘即停泊）
-                if not money_mode and held_money:
+                if not gate_mode and held_money:
                     self.redeem_money(st, date)
                     self.rebalance_sleeves(st, self.synth_weights(st), date)
-                if not money_mode and not held_money:
+                if not gate_mode and not held_money:
+                    # 防守→正常切换点：衰减进场窗口启动
+                    if was_defense:
+                        st["reentry_until"] = i + cg_reentry_days
                     # 3) 腿策略执行（prev 信号 → 今日开盘撮合；状态机门禁）
+                    # 出闸后回稳期(≤reentry_days)：买入预算按 damp 衰减——
+                    # 出闸三条件（灯绿/近5日无急跌/高点回归）已在门内生效
+                    damp_on = cg_on and i <= st.get("reentry_until", -1)
+                    sp_d = sp
+                    sig_eff = prev_sig
+                    if damp_on and cg_reentry_damp < 1:
+                        sp_d = _copy.deepcopy(sp)
+                        sp_d["n_assets"] = len(self.core) / cg_reentry_damp
+                        # 逐资产高点回归：未回归自身 60 日高点×ratio 的标的
+                        # 本日信号置零（不接飞刀，防 QDII 独立崩盘咬仓）
+                        sig_eff = _copy.deepcopy(prev_sig)
+                        w_dates = self.dates[max(1, i - 60):i]
+                        for leg in ("A", "B"):
+                            for c in self.core:
+                                closes = self.closes_by_date[c]
+                                w60 = [closes[d] for d in w_dates if d in closes]
+                                hi = max(w60, default=0.0)
+                                latest = closes.get(prev_date, 0.0)
+                                if hi and latest < cg_reentry_ratio * hi:
+                                    sig_eff[leg][c] = 0.0
                     for leg in ("A", "B"):
                         o = portfolio.place_orders(st["sleeves"][leg], day_price,
-                                                   prev_sig[leg], sp, date)
+                                                   sig_eff[leg], sp_d, date)
                         assert_gate(light["state"], o)
                 # 4) 每日收盘残余现金停泊货币腿（禁止现金空转）
                 self.park_money(st, date)
@@ -371,8 +469,10 @@ class EnsembleEngine:
                        datetime.strptime(self.dates[i + 1], "%Y-%m-%d")
                        .isocalendar()[:2] != iso)
             if is_last and not locked:
-                import factor_mining
-                sc = factor_mining.weekly_score(asof=date, allow_llm=allow_llm)
+                sc = None
+                if date >= self.fac_min:      # 窗口外历史日无因子台账 → 纯赛马
+                    import factor_mining
+                    sc = factor_mining.weekly_score(asof=date, allow_llm=allow_llm)
                 score = sc.get("score") if sc else None
                 w = race_weights(st["weight_a"], sleeve_sharpe(st["sleeves"]["A"]["curve"]),
                                  sleeve_sharpe(st["sleeves"]["B"]["curve"]),
@@ -382,8 +482,9 @@ class EnsembleEngine:
                       "sharpe_b": round(sleeve_sharpe(st["sleeves"]["B"]["curve"]) or 0, 3),
                       "prev_wa": round(st["weight_a"], 3), **w, "factor": sc}
                 st["race_log"].append(tr)
-                with open(RACE_LOG, "a", encoding="utf-8") as f:
-                    f.write(json.dumps(tr, ensure_ascii=False) + "\n")
+                if self.log_writes:
+                    with open(RACE_LOG, "a", encoding="utf-8") as f:
+                        f.write(json.dumps(tr, ensure_ascii=False) + "\n")
                 race_pending = w
                 st["weight_a"] = w["weight_a"]
                 st["c_buffer"] = w["c_buffer"]

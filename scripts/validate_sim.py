@@ -135,6 +135,33 @@ try:
 except push.PushBlocked:
     check("V5b 真实 URL 测试模式拦截", True)
 
+# ------------------------------------------------------------- V7 因子硬逻辑
+try:
+    bull = factor_mining._extreme_bull()
+    s = factor_mining.rule_score(bull)
+    check("V7a 极端牛市规则分 ≥ 90", s >= 90, f"score={s}")
+    bear = factor_mining._extreme_bear()
+    s = factor_mining.rule_score(bear)
+    check("V7b 极端熊市规则分 ≤ 10", s <= 10, f"score={s}")
+    try:
+        factor_mining.audit_factor_logic(bear, {"score": 90, "source": "llm"})
+        check("V7c 暴跌给90分 → FactorBiasError", False)
+    except factor_mining.FactorBiasError as e:
+        check("V7c 暴跌给90分 → FactorBiasError+LLM_FACTOR_BIAS",
+              "LLM_FACTOR_BIAS" in str(e))
+except Exception as e:  # noqa: BLE001
+    check("V7 因子审计执行失败", False, f"{type(e).__name__}: {e}")
+
+# ------------------------------------------------------------- V8 窗口确定性
+eng1 = __import__("ensemble_engine").EnsembleEngine(
+    window=("2026-06-01", "2026-10-19"), log_writes=False)
+c1 = eng1.run()["curve"]
+eng2 = __import__("ensemble_engine").EnsembleEngine(
+    window=("2026-06-01", "2026-10-19"), log_writes=False)
+c2 = eng2.run()["curve"]
+check("V8 窗口重放确定性（两次独立运行曲线一致）", c1 == c2,
+      f"{len(c1)} 天尾值 {c1[-1][1] if c1 else '-'}")
+
 # -------------------------------------------------------------
 print("=" * 50)
 if FAILS:

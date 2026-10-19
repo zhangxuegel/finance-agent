@@ -85,6 +85,14 @@ ensemble:
     score_low: 20              # <20 → 策略 C（货币腿）加权
     c_tilt_pp: 0.10
     warmup_fixed_share: 0.5    # 赛马数据未满 20 日前固定 5:5
+  crash_gate:                  # ---- T-Fin04 急跌熔断门（台账登记）----
+    enable: true
+    drop_threshold: 0.02       # 基准最近收一笔收盘单日 ≤ -2%（次日开盘起全面防守）
+    hold_days: 3               # 至少防守 3 个交易日；再遇 ≤-2% 重新计时
+    # 退出条件：灯回绿 且 近5日无 ≤-drop 急跌（反绿闪，防崩盘期重复进场）
+    reentry_days: 10            # 防守解除后的回稳观察期
+    reentry_damp: 0.5           # 观察期内买入预算减半（衰减进场）
+    reentry_ratio: 0.99         # 复进门槛（基准+逐资产）：收盘 ≥ 60日高点×0.99；不达标继续防守
 
 push:
   webhook_url_env: FIN_PUSH_URL # 真实群 URL 仅从环境变量读；本地/测试一律走 loopback mock
@@ -92,6 +100,8 @@ push:
 
 cron:
   schedule: "30 15 * * 1-5"     # A股收盘后 15:30 交易日自动执行
+  morning_schedule: "0 8 * * 1-5"  # T-Fin04：每个交易日 8:00 生成晨报（一睁眼可见）
+  weekly_report: "0 9 * * 6"    # 周六 9:00 周末深度复盘（含溯源）
   runner: scripts/run_daily_all.sh
 
 factor:

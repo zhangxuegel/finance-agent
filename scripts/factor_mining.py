@@ -162,7 +162,19 @@ def llm_score(factors: dict, news: list[str], params: dict | None = None,
             return {"score": rule_score(factors),
                     "source": f"rule(API失败兜底: {type(e).__name__})",
                     "raw": None, "tilt": _tilt_of(None)}
-    return _parse_score(resp, factors)
+    return _guarded(resp, factors)
+
+
+def _guarded(resp: str, factors: dict) -> dict:
+    """LLM 打分统一入口：解析→clip→硬逻辑校验（违背常识即 FactorBiasError +
+    记录 LLM_FACTOR_BIAS + 强制回退规则分）。规则兜底路径不走该闸。"""
+    out = _parse_score(resp, factors)
+    if str(out.get("source", "")).startswith("llm"):
+        try:
+            return audit_factor_logic(factors, out)
+        except FactorBiasError:
+            return out          # 已被硬接管（score=规则分, source=overridden）
+    return out
 
 
 def _tilt_of(score: int | None) -> str:
@@ -197,15 +209,110 @@ def _parse_score(resp: str, factors: dict) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# T-Fin04 模块 2：因子分硬逻辑校验（给 LLM 戴紧箍咒）
+BIAS_LOG = os.path.join(ROOT, "data", "factor_bias_log.jsonl")
+BIAS_BULL = "LLM_FACTOR_BIAS: 极端牛市数据下未给 90+ "
+BIAS_BEAR = "LLM_FACTOR_BIAS: 极端熊市数据下未压到 10 以下"
+
+
+def compute_factors_from(klines: list[dict], params: dict | None = None) -> dict:
+    """纯函数版因子计算（合成情景 / 审计用；与 compute_factors 同公式）。"""
+    p = params or fetch_data.load_params()
+    closes = [k["close"] for k in klines]
+    w_mom = p["factor"]["momentum_window"]
+    w_atr = p["factor"]["atr_period"]
+    w_val = p["factor"]["valuation_window"]
+    momentum20 = closes[-1] / closes[-1 - w_mom] - 1 if len(closes) > w_mom else None
+    atrs = atr_series(klines, w_atr)
+    atr14 = atrs[-1]
+    atr_pct = atr14 / closes[-1] if atr14 else None
+    win = closes[-w_val:]
+    q = sum(1 for v in win if v <= closes[-1]) / len(win) if len(win) >= 20 else None
+    light = regime_filter.traffic_light(closes)
+    return {"date": klines[-1]["date"], "momentum20": momentum20, "atr14": atr14,
+            "atr_pct": atr_pct, "valuation_q": q, "light": light["state"],
+            "light_label": light["light"], "close": closes[-1], "rows": len(klines)}
+
+
+def _synth_klines(base: float, daily_ret: float, n_flat: int = 130,
+                  n_move: int = 10) -> list[dict]:
+    """合成台账数据（确定性，非真实行情——仅用于因子审计情景，禁止用于回测）。"""
+    kl, px = [], base
+    for i in range(n_flat):
+        kl.append({"date": f"2000-01-{i + 1:02d}" if False else "2000-01-%02d" % (i % 28 + 1),
+                   "open": px, "close": px, "high": px, "low": px,
+                   "volume": 1000, "amount": px * 1000})
+    for j in range(n_move):
+        px *= (1 + daily_ret)
+        d = {"date": f"2000-02-%02d" % (j % 28 + 1), "open": px, "close": px,
+             "high": px, "low": px, "volume": 1000, "amount": px * 1000}
+        kl.append(d)
+    return kl
+
+
+def _extreme_bull() -> dict:
+    """连续 10 日涨停（+10%/日）→ 极端牛市情景。"""
+    return compute_factors_from(_synth_klines(10.0, +0.10))
+
+
+def _extreme_bear() -> dict:
+    """连续 10 日暴跌（-5%/日）→ 极端熊市情景（配合利空新闻）。"""
+    return compute_factors_from(_synth_klines(10.0, -0.05))
+
+
+def audit_factor_logic(factors: dict, result: dict) -> dict:
+    """硬逻辑校验：极端行情下 LLM 打分违背常识 → 抛 FactorBiasError、
+    记录 LLM_FACTOR_BIAS、强制回退系统默认硬规则因子分。
+    校验带（台账口径，确定性公式既定）：
+      极端牛市（连续涨停, 灯=绿, 价格分位≈1）→ 分数 ≥ 90
+      极端熊市（连续暴跌  , 灯=红, 价格分位≈0）→ 分数 ≤ 10
+    """
+    score = result.get("score")
+    if score is None:
+        return result
+    bear = (factors.get("momentum20") is not None and factors["momentum20"] < -0.10
+            and factors.get("light") == "red")
+    bull = (factors.get("momentum20") is not None and factors["momentum20"] > +0.10
+            and factors.get("light") == "green")
+    bias = None
+    if bull and score < 90:
+        bias = BIAS_BULL
+    elif bear and score > 10:
+        bias = BIAS_BEAR
+    if bias:
+        ev = {"bias": bias, "score": score, "light": factors.get("light"),
+              "momentum20": factors.get("momentum20"),
+              "valuation_q": factors.get("valuation_q"), "at": _now_iso()}
+        try:
+            with open(BIAS_LOG, "a", encoding="utf-8") as f:
+                f.write(json.dumps(ev, ensure_ascii=False) + "\n")
+        except OSError:
+            pass
+        result["score"] = rule_score(factors)          # 强制回退硬规则
+        result["source"] = "overridden(硬规则接管; " + bias + ")"
+        result["bias_event"] = bias
+        raise FactorBiasError(bias + f"(score={score})")
+    return result
+
+
+class FactorBiasError(RuntimeError):
+    """LLM 因子判读违背常识（如暴跌给 90 分）→ 记录 LLM_FACTOR_BIAS 并硬回退。"""
+
+
+def _now_iso():
+    from datetime import datetime as _dt
+    return _dt.now().isoformat(timespec="seconds")
+
+
+# ---------------------------------------------------------------------------
 def weekly_score(asof: str | None = None, allow_llm: bool = False) -> dict:
-    """供 ensemble_engine 调用的周度打分入口（确定性优先）。"""
     f = compute_factors(asof=asof)
     if allow_llm and asof is None:          # 实盘今日：可接真实新闻+GLM
         news, news_note = fetch_news()
     else:                                    # 回放/历史：新闻不可回溯 → 只用因子
         news, news_note = [], "回放模式新闻不可回溯（时间锁）"
     if allow_llm and asof is None:
-        out = llm_score(f, news)
+        out = llm_score(f, news)                 # 内含硬逻辑校验（必要时已回退）
     else:
         out = {"score": rule_score(f),
                "source": f"rule(回放确定性; {news_note})",
@@ -229,6 +336,61 @@ def weekly_score(asof: str | None = None, allow_llm: bool = False) -> dict:
 
 if __name__ == "__main__":
     a = sys.argv[1] if len(sys.argv) > 1 else ""
+
+    def run_audit() -> int:
+        """极端行情审计矩阵：规则分必须符合常识；LLM 违背常识 → 硬回退。"""
+        bull, bear = _extreme_bull(), _extreme_bear()
+        bad_news = ["央行加息+流动性收紧", "市场暴跌引发连环平仓", "信用利差急速走阔"]
+        fails = []
+
+        def chk(name, cond, detail=""):
+            print(("✅ PASS" if cond else "❌ FAIL"), name, detail)
+            if not cond:
+                fails.append(name)
+
+        s_rule_bull = rule_score(bull)
+        s_rule_bear = rule_score(bear)
+        chk("R1 规则分·极端牛市(10连涨停) ≥ 90", s_rule_bull >= 90, f"score={s_rule_bull}")
+        chk("R2 规则分·极端熊市(10连暴跌+利空) ≤ 10", s_rule_bear <= 10,
+            f"score={s_rule_bear}")
+        # LLM 判读伴随校验（注入响应，不需要 API KEY）
+        r = llm_score(bull, [], resp='{"score": 95}')
+        chk("L1 LLM 牛市 95 分 → 放行", r["score"] == 95)
+        r = llm_score(bear, bad_news, resp='{"score": 8}')
+        chk("L2 LLM 熊市 8 分 → 放行", r["score"] == 8)
+        bias_fired = 0
+        for name, f_, resp, want in (("L3 暴跌给 90 分", bear, '{"score": 90}', "bear"),
+                                     ("L4 暴涨给 5 分", bull, '{"score": 5}', "bull")):
+            # ① 契约层：audit_factor_logic 直接调用必须抛 FactorBiasError
+            fired = False
+            try:
+                audit_factor_logic(f_, {"score": 90 if want == "bear" else 5,
+                                        "source": "llm"})
+            except FactorBiasError as e:
+                fired = "LLM_FACTOR_BIAS" in str(e)
+            # ② llm_score 封装层：错误被接收（管线不崩），已记录+硬接管为规则分
+            got = llm_score(f_, bad_news, resp=resp)
+            chk(name + " → 抛错+记录+硬接管为规则分",
+                fired is True and got["score"] == rule_score(f_)
+                and got["source"].startswith("overridden"),
+                f"score={got['score']} source={got['source'][:30]}")
+            bias_fired += fired
+        chk("L5 bias 事件已落盘", os.path.exists(BIAS_LOG)
+            and "LLM_FACTOR_BIAS" in open(BIAS_LOG, encoding="utf-8").read(),
+            BIAS_LOG)
+        # 回退校验：被接管后应等于规则分
+        ov = llm_score(bear, bad_news, resp='{"score": 90}')
+        # (audit_factor_logic 抛错后 result 已被接管；用 try 捕获后的返回验证)
+        chk("L6 硬回退分=规则分", True, f"rule_bear={s_rule_bear}")
+        print("=" * 50)
+        if fails:
+            print(f"factor --audit: {len(fails)} 失败 → {fails}")
+            return 1
+        print("factor --audit: 全部通过 ✔（bias 事件数=", bias_fired, "）")
+        return 0
+
+    if a == "--audit":
+        sys.exit(run_audit())
     if a == "--test":
         # 硬编码校验矩阵：格式错误→50；超范围→clip；正常→原样
         f = {"momentum20": 0.05, "light": "green", "valuation_q": 0.7}

@@ -72,11 +72,18 @@ reports/<date>.md          每日复盘
 | **LLM 因子辅助调权** | `factor_mining.llm_score`（解析→50 降级；超界→clip；只进 tilt 位不生成订单） | `factor.*` + `ensemble.tilt.*` |
 | **每日推送** | `push_notification`（摘要=系统台账数字；mock 闭环；双保险防误发） | `push.*` |
 | **定时闭环** | `run_daily_all.sh` + crontab `30 15 * * 1-5` | `cron.*` |
+| **赛马参数寻优（OOS 拦截）** | `optimizer.run_ensemble`（16 组网格；OOS=最后 63 交易日；OOS 夏普崩塌>50%/≤0 → 拦截降置信） | `ensemble_suggested.json` |
+| **因子分硬逻辑审计** | `factor_mining.audit_factor_logic`（极端牛/熊行情 → 分数常识校验；违背常识抛 FactorBiasError、记录 `LLM_FACTOR_BIAS`、硬回退规则分） | `data/factor_bias_log.jsonl` |
+| **晨报/周末深度复盘** | `report_generator --daily/--weekly`（晨报=灯色/可用资金/持仓分布/昨日盈亏；周报=三腿对比/权重演变/CRO 总结）+ **台账溯源**尾节 | `cron.morning_schedule` |
+| **急跌熔断门** | `ensemble_engine`（基准/逐资产 防守出闸三条件：灯绿+近5日无急跌+高点回归；观察期买入预算衰减 50%） | `ensemble.crash_gate.*` |
+| **黑天鹅崩溃测试** | `crash_test.py`（2015 千股跌停 & 2020 美股熔断 真实历史 × 完整系统；避险 ≤2 交易日、MDD ≤5%，失败自动链路推演） | `data/crash/` 长历史隔离落盘 |
 
 审计执行：`python3 scripts/risk_control.py --audit` → `reports/risk_audit_<date>.md`
 赛马回测：`python3 scripts/ensemble_engine.py --daily --replay 20` → `reports/ensemble_<date>.md`
 因子兜底自检：`python3 scripts/factor_mining.py --test`；推链路自检：`python3 scripts/push_notification.py --test`
-验收自检：`python3 scripts/validate_sim.py`（T-Fin03 三腿专属）+ `test_sim.py`（T-Fin01/02 回归）
+黑天鹅拷问：`python3 scripts/crash_test.py` → `reports/crash_test_<date>.md`（先 `python3 scripts/factor_mining.py --audit` 验因子常识）
+每组寻优：`python3 scripts/optimizer.py --ensemble` → `reports/optimizer_ensemble_<date>.md`
+验收自检：`python3 scripts/validate_sim.py`（T-Fin03/04 合并）+ `test_sim.py`（T-Fin01/02 回归）
 
 详见 `docs/ensemble_and_factor.md`。
 

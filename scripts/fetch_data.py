@@ -112,7 +112,10 @@ def _klines_tencent(secid: str, natural_days: int) -> list[dict]:
 # 对外接口
 def fetch_klines(secid: str, natural_days: int = DEFAULT_YEARS * NATURAL_PER_YEAR) -> list[dict]:
     """抓日线并按日期正序返回。两个数据源都失败则抛 RuntimeError。"""
-    data = _klines_east(secid, natural_days)
+    try:
+        data = _klines_east(secid, natural_days)
+    except Exception:  # noqa: BLE001 —— 东财限流/断连 → 降级腾讯
+        data = []
     if len(data) < 30:
         data = _klines_tencent(secid, natural_days)
     cutoff = (datetime.now() - timedelta(days=natural_days)).strftime("%Y-%m-%d")
@@ -154,8 +157,8 @@ def validate(klines: list[dict], code: str, natural_days: int) -> dict:
             "coverage": f"{cover:.1%}", "max_gap_checked": 12}
 
 
-def save_csv(klines: list[dict], code: str) -> str:
-    path = os.path.join(DATA_DIR, f"{code}.csv")
+def save_csv(klines: list[dict], code: str, data_dir: str | None = None) -> str:
+    path = os.path.join(data_dir or DATA_DIR, f"{code}.csv")
     with open(path, "w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=["date", "open", "close", "high", "low",
                                           "volume", "amount"])
@@ -164,9 +167,10 @@ def save_csv(klines: list[dict], code: str) -> str:
     return path
 
 
-def load_csv(code: str) -> list[dict]:
-    """读取台账 CSV；其他模块统一从这里读数据。"""
-    path = os.path.join(DATA_DIR, f"{code}.csv")
+def load_csv(code: str, data_dir: str | None = None) -> list[dict]:
+    """读取台账 CSV；其他模块统一从这里读数据。
+    data_dir 可指定独立目录（如 data/crash 黑天鹅长历史，避免污染正式台账）。"""
+    path = os.path.join(data_dir or DATA_DIR, f"{code}.csv")
     with open(path, newline="", encoding="utf-8") as f:
         rows = list(csv.DictReader(f))
     for r in rows:
@@ -174,6 +178,16 @@ def load_csv(code: str) -> list[dict]:
             r[field] = float(r[field])
         r["volume"] = int(r["volume"])
     return rows
+
+
+def fetch_and_save(secid: str, code: str, natural_days: int,
+                   data_dir: str | None = None) -> str:
+    """抓取并落盘到指定目录（crash_test 用：长历史黑天鹅数据）。"""
+    kl = fetch_klines(secid, natural_days)
+    info = validate(kl, code, natural_days)
+    path = save_csv(kl, code, data_dir)
+    print(f"[fetch] {code}: {info['rows']} 行 {info['first']}~{info['last']} → {path}")
+    return path
 
 
 def load_params() -> dict:
