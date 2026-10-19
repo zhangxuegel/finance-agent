@@ -11,8 +11,11 @@
 set -u
 cd "$(dirname "$0")" || exit 1
 
-# 可选：把密钥写在 ~/.finance_agent_cloud 文件（格式：export SUPABASE_URL=... / export SUPABASE_KEY=...）
+# 密钥来源优先级：环境变量 → $HOME/.finance_agent_cloud → 项目根 .env（T-Fin09 自动生成）
 [ -f "$HOME/.finance_agent_cloud" ] && . "$HOME/.finance_agent_cloud"
+if [ -z "${SUPABASE_URL:-}" ] && [ -f ".env" ]; then
+  . ./.env
+fi
 
 LOG="logs/cloud_sync_$(date +%F).log"
 mkdir -p logs

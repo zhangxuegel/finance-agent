@@ -80,6 +80,19 @@ Supabase 面板 Table Manager 里应能看到 `sb_shadow_eod` 有数据行。
 
 ## 第 3 步 · 部署 Streamlit Cloud
 
+**方式 0（最快，T-Fin09）：全自动接管**
+
+```bash
+python3 scripts/cloud_provision.py   # 提示你给 1 枚 Personal Access Token（唯一人工步）
+bash sync_all.sh                     # 数据上去
+python3 scripts/test_cloud_connection.py
+```
+
+脚本自动：建 org → 建 project `finance-agent`（IP 地理定位选最近区）→ 轮询 ACTIVE
+→ 执行 `scripts/cloud_schema.sql` 建表 → 抓 URL/anon key 注入 `.env` +
+`data/CLOUD_KEYS.txt`（备忘录，供下面 Secrets 使用）。以下“方式 A”的人工步骤
+你已无需再做——只需跳到第 3 步填 secrets（从 data/CLOUD_KEYS.txt 复制）。
+
 **方式 A（推荐）：GitHub 拉取法**
 
 1. 在手机/任意设备把整个 `finance-agent` 目录推/上传到 GitHub（新建 repo，

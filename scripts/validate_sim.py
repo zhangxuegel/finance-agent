@@ -288,6 +288,31 @@ try:
 except Exception as e:  # noqa: BLE001
     check("V11c 云端基建", False, f"{type(e).__name__}: {e}")
 
+# ------------------------------------------------------------- V12 全自动接管
+try:
+    import cloud_provision as _cp
+    reg = _cp.nearest_region()
+    check("V12a 区域遴选（IP 定位→最近 Supabase 区，失败兜底 Singapore）",
+          reg in [r[0] for r in _cp.REGIONS], f"region={reg}")
+except Exception as e:  # noqa: BLE001
+    check("V12a 区域遴选", False, f"{type(e).__name__}: {e}")
+try:
+    import test_cloud_connection as _tc
+    rc = _tc.main()
+    check("V12b 云端自检分诊（无配置→2 引导 / 有配置→跑真实读写）",
+          rc in (0, 2), f"rc={rc}（2=待令牌，0=全通；1 字段才不合格）")
+except Exception as e:  # noqa: BLE001
+    check("V12b 云端自检分诊", False, f"{type(e).__name__}: {e}")
+try:
+    sql = open(os.path.join(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))), "scripts", "cloud_schema.sql"),
+        encoding="utf-8").read()
+    check("V12c cloud_schema.sql 齐备（两表+幂等 IF NOT EXISTS）",
+          "sb_shadow_eod" in sql and "sb_shadow_fills" in sql
+          and sql.count("CREATE TABLE IF NOT EXISTS") == 2)
+except Exception as e:  # noqa: BLE001
+    check("V12c cloud_schema.sql", False, f"{type(e).__name__}: {e}")
+
 # -------------------------------------------------------------
 print("=" * 50)
 if FAILS:

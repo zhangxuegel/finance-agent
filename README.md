@@ -102,7 +102,8 @@ data/live/*.csv            影子台账行情（正式台账 CSV + 逐日真实 
 本地看板：`python3 scripts/dashboard.py --port 8501` → `http://127.0.0.1:8501`（Termux 浏览器打开；静态快照 `reports/dashboard_snapshot_<date>.html`）
 紧急制动：`python3 scripts/kill_switch.py --panic "原因"` → 全局停牌（`PANIC_LOCK.flag`）；`--release` 解锁；`--status` 查询
 云端看板：`bash sync_all.sh`（增量推送）→ 部署法见 `README_DEPLOY.md`（Supabase 建表 SQL + share.streamlit.io 三步上线）
-验收自检：`python3 scripts/validate_sim.py`（V1–V11）+ `test_sim.py`（T-Fin01/02 回归）
+云端全自动接管：`python3 scripts/cloud_provision.py`（仅需 1 枚人工 Access Token：pan · 令牌后 org/建库/选址/建表/注入 .env+CLOUD_KEYS.txt 全自动）；自检 `python3 scripts/test_cloud_connection.py`
+验收自检：`python3 scripts/validate_sim.py`（V1–V12）+ `test_sim.py`（T-Fin01/02 回归）
 
 详见 `docs/ensemble_and_factor.md`。
 
