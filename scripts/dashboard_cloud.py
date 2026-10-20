@@ -65,16 +65,41 @@ div[data-testid="stMarkdownContainer"] .fa-badge {
 """
 
 
+def _pick(section, names: list[str]) -> str:
+    """纯函数：从 dict/映射里按候选名取第一个非空字符串（大小写兼容）。
+    兼容 st.secrets["supabase"] 为 Mapping 或 dict-get 可用的情况。"""
+    for n in names:
+        try:
+            v = section.get(n, "")
+        except AttributeError:
+            v = section[n] if n in section else ""
+        if v:
+            return str(v)
+    return ""
+
+
+_URL_NAMES = ["url", "supabase_url", "SUPABASE_URL"]
+_KEY_NAMES = ["key", "supabase_key", "SUPABASE_KEY"]
+
+
 def config_from_env() -> tuple[str, str, str]:
-    """(url, key, prefix)。secrets.toml → 环境变量 双兜底。"""
+    """(url, key, prefix)。读取优先级（T-Fin14 兼容矩阵）：
+      1) st.secrets["supabase"] 下 url/supabase_url/SUPABASE_URL（+key 同理）
+      2) st.secrets 顶层同上候选名（有人把配置平铺写在表外）
+      3) os.environ SUPABASE_URL / SUPABASE_KEY
+    secrets.toml → 环境变量 双兜底。"""
     url = key = ""
     if st is not None:
-        try:
-            url = st.secrets["supabase"]["url"].rstrip("/")
-            key = st.secrets["supabase"]["key"]
-        except Exception:  # noqa: BLE001 —— secrets 未配置 → 走环境变量
-            pass
-    url = url or os.environ.get("SUPABASE_URL", "").rstrip("/")
+        for src in ("supabase", None):
+            try:
+                sec = st.secrets[src] if src else dict(st.secrets)
+            except Exception:  # noqa: BLE001 —— secrets 缺该表/整表缺
+                continue
+            url = _pick(sec, _URL_NAMES)
+            key = _pick(sec, _KEY_NAMES)
+            if url or key:
+                break
+    url = (url or os.environ.get("SUPABASE_URL", "")).rstrip("/")
     key = key or os.environ.get("SUPABASE_KEY", "")
     prefix = os.environ.get("SUPABASE_TABLES", "sb_")
     return url, key, prefix
@@ -327,6 +352,20 @@ def selftest() -> int:
         nonlocal ok
         print(("✅" if cond else "❌"), name, extra)
         ok = ok and cond
+
+    # secrets 兼容矩阵（_pick：小写/大写/平铺）
+    chk("C1 secrets 小写键名", _pick(
+        {"url": "https://x.supabase.co/", "key": "k1"},
+        _URL_NAMES) == "https://x.supabase.co/")
+    chk("C2 secrets 大写键名", _pick(
+        {"url": "", "SUPABASE_URL": "https://y.supabase.co"},
+        _URL_NAMES) == "https://y.supabase.co")
+    chk("C3 候选序（url 优先于 SUPABASE_URL）", _pick(
+        {"url": "https://a", "SUPABASE_URL": "https://b",
+         "key": "k"}, _URL_NAMES) == "https://a")
+    chk("C4 全空返回空串", _pick({"url": "", "key": ""},
+                                  _URL_NAMES) == "")
+    chk("C5 缺键不炸", _pick({}, _KEY_NAMES) == "")
 
     # 红绿灯：熔断/防守/急跌/正常 四态 + 优先级
     chk("L1 熔断最高优先",

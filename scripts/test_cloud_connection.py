@@ -18,6 +18,11 @@ sys.path.insert(0, BASE)
 
 import sync_to_cloud as sc
 
+# eod 数值字段（对账仅 float 这些；trade_date/notes 等文本字段做相等比较）
+_NUMERIC_FIELDS = frozenset({
+    "nav", "nav_prev", "day_ret", "bench_index_close", "bench_index_pct",
+    "alpha", "defense", "fills_n", "lock_remaining"})
+
 
 def local_latest_eod() -> tuple[dict, int]:
     conn = sqlite3.connect(sc.DB)
@@ -54,10 +59,18 @@ def main() -> int:
     if cloud is None:
         print(f"❌ 云端空表：本地 {local_n} 行还没推？→ bash sync_all.sh")
         return 1
-    mism = [k for k, v in loc.items()
-            if k in cloud and float(cloud[k]) != float(v)]
-    if mism:
-        print(f"❌ 云/本地对账不一致字段：{mism}（数据可能被污染——查 events）")
+    mism_num, mism_txt = [], []
+    for k, v in loc.items():
+        if k not in cloud:
+            continue
+        if k in _NUMERIC_FIELDS:  # 只对数值字段做 float 对账
+            if float(cloud[k] or 0) != float(v or 0):
+                mism_num.append(k)
+        elif (cloud[k] or "") != (str(v) if v is not None else ""):
+            mism_txt.append(k)
+    if mism_num or mism_txt:
+        print(f"❌ 云/本地对账不一致字段：数值={mism_num} 文本={mism_txt}"
+              "（数据可能被污染——查 events）")
         return 1
     # ---- 写验证（同值幂等 upsert，不新增行）----
     r2 = sess.post(f"{url}/rest/v1/sb_shadow_eod",
