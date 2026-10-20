@@ -35,3 +35,7 @@
 2026-10-19 21:57:41 [eod_gap] 510300: 2026-10-20 行情未出，EOD 以最近一日 2026-10-19 收盘估值
 2026-10-19 21:57:55 [eod_gap] 000300: 2026-10-20 行情未出，EOD 以最近一日 2026-10-19 收盘估值
 2026-10-19 22:09:13 [cloud_sync_fatal] 未配置云端 API：请设置 SUPABASE_URL / SUPABASE_KEY （README_DEPLOY.md 第 1 步）
+2026-10-20 00:53:30 [cloud_sync_fatal] 云端写入失败 sb_shadow_eod: HTTP 404 {"code":"PGRST205","details":null,"hint":null,"message":"Could not find the table 'public.sb_shadow_eod' in the schema cache"}
+2026-10-20 00:55:56 [cloud_sync_fatal] 云端写入失败 sb_shadow_eod: HTTP 404 {"code":"PGRST205","details":null,"hint":null,"message":"Could not find the table 'public.sb_shadow_eod' in the schema cache"}
+2026-10-20 00:59:23 [cloud_sync_fatal] 云端写入失败 sb_shadow_eod: HTTP 404 {"code":"PGRST205","details":null,"hint":null,"message":"Could not find the table 'public.sb_shadow_eod' in the schema cache"}
+2026-10-20 01:06:21 [cloud_sync] eod+1 fills+0 → {'sb_shadow_eod': 1, 'sb_shadow_fills': 0}

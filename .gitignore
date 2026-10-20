@@ -3,3 +3,10 @@ scripts/__pycache__/
 PANIC_LOCK.flag
 .env
 data/CLOUD_KEYS.txt
+
+# 由历史清理同时加固的敏感文件
+data/shadow_live.db
+data/*.db
+secret*
+*.key
+logs/cloud_sync_*.log
