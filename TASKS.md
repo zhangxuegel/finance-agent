@@ -12,12 +12,12 @@
 
 ## 未完成任务（2026-10-21 核定）
 
-- [ ] T-Fin23 接入 GLM LLM 分析师（风控官点评 + 因子分）
-  - 现状：报告持续走 `rule` 兜底，`2026-10-21.md` 明示"LLM 未接入：未设置 GLM_API_KEY"。
-  - 待办：在 `.streamlit/secrets.toml` 同级环境配置 `GLM_API_KEY`，跑通
-    `daily_report.py` 的 LLM CRO 四问点评 与 `factor_mining.py --llm`
-    （因子里程碑：输出只进 tilt 位/reports 文字区，无下单权）。
-  - 依赖：需要用户提供 GLM_API_KEY。
+- [~] T-Fin23 接入 GLM LLM 分析师（风控官点评 + 因子分）
+  - 状态（2026-10-21）：**等待用户提供 GLM_API_KEY（约定等待 ≤15 分钟，会话保持，不退出）**。
+  - 已锁基线：receipt sha256 冻结指纹 `reports/freeze_2026-10-21.sha256`（8/8 OK），
+    key 到位后按三步执行：①写到 ~/.profile（不进 git）②llm_review/llm_score 单点
+    安全验收（不推进台账）③crontab 顶部 env 注入（先展示再改）。
+  - Key 格式：智谱 open.bigmodel.cn 两段式原文（`32位.16位`，不带 Bearer 前缀）。
 
 - [x] T-Fin24 优化器网格全 OOS 崩塌问题（✅2026-10-21 完成，走验收分支 b"有台账依据的维持拦截"）
   - 交付：a) `ENSEMBLE_GRID` 16→48 组，新增 `race.winner_share·loser_share`
