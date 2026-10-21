@@ -12,6 +12,16 @@
 
 ## 未完成任务（2026-10-21 核定）
 
+- [~] T-Fin31 云端灾备代跑设计（业主 2026-10-21 提问：手机冻结时可否云端代跑，
+  信号恢复再同步）。现状核查：origin=github.com:zhangxuegel/finance-agent.git，
+  本地 main **ahead 17 未推**；Termux 无对应 SSH 私钥（T-Fin12 后历次提交均在
+  本地）；.gitignore 密钥纪律齐备；.github/workflows 尚无。
+  设计稿已回业主（Actions 热备 runner + 单写水位防分叉），**待业主拍板三点**：
+  ①repo 公私与是否允许 Actions 拉私有库（免费 runner 限公共库）；②密钥走
+  Actions Secrets（SUPABASE/GLM 不落 code）；③单日幂等闸（engine --daily
+  按 trade_date 水位跳过已跑日，防手机/云端双写分叉）。拍板后开工。
+
+
 - [x] T-Fin23 接入 GLM LLM 分析师（✅2026-10-21 完成）
   - 交付：①key 注入 `~/.bashrc` export GLM_API_KEY（用户自置，不进 git）；
     ②单点安全验收：`daily_report.llm_review` → `mode: llm`、真实回复语义正确
