@@ -182,19 +182,22 @@ def run():
 
 # ---------------------------------------------------------------------------
 # T-Fin04 模块 1：赛马参数网格寻优（红线继承：熔断不可优化，MDD≤12% 绝对上限）
-# 小范围网格：平滑带 × 权重下限 × A双均线 × B RSI → 16 组（台账登记搜索半径）
+# 小范围网格：胜败分配 × 平滑带 × 权重下限 × A双均线 × B RSI → 48 组（T-Fin24 台账登记搜索半径）
 def _ensemble_combos():
     combos = []
-    for shift in (0.10, 0.20):                     # race.max_weekly_shift
-        for minw in (0.30, 0.40):                  # race.min_weight
-            for a in ((20, 60), (10, 60)):         # A: (ma_fast, ma_slow)
-                for b in ((30, 70), (25, 75)):     # B: (rsi_buy, rsi_sell)
-                    combos.append({("race", "max_weekly_shift"): shift,
-                                   ("race", "min_weight"): minw,
-                                   ("A", "ma_fast"): a[0],
-                                   ("A", "ma_slow"): a[1],
-                                   ("B", "rsi_buy"): b[0],
-                                   ("B", "rsi_sell"): b[1]})
+    for wl in ((0.7, 0.3), (0.8, 0.2), (0.6, 0.4)):  # T-Fin24: race (winner_share, loser_share)
+        for shift in (0.10, 0.20):                     # race.max_weekly_shift
+            for minw in (0.30, 0.40):                  # race.min_weight
+                for a in ((20, 60), (10, 60)):         # A: (ma_fast, ma_slow)
+                    for b in ((30, 70), (25, 75)):     # B: (rsi_buy, rsi_sell)
+                        combos.append({("race", "winner_share"): wl[0],
+                                       ("race", "loser_share"): wl[1],
+                                       ("race", "max_weekly_shift"): shift,
+                                       ("race", "min_weight"): minw,
+                                       ("A", "ma_fast"): a[0],
+                                       ("A", "ma_slow"): a[1],
+                                       ("B", "rsi_buy"): b[0],
+                                       ("B", "rsi_sell"): b[1]})
     return combos
 
 
@@ -355,7 +358,7 @@ def _report_ensemble_opt(out: dict) -> str:
               "- 排序依据 OOS 夏普（样本外表现优先于训练集过拟合高分）。", "",
               "## 4) 台账溯源", "",
               f"- 建议值：`index/ensemble_suggested.json`；审计流水：`data/optimizer_log.jsonl`；",
-              "- 网格维度：`race.max_weekly_shift / race.min_weight / A.ma_fast·ma_slow / B.rsi_buy·rsi_sell`",
+              "- 网格维度：`race.winner_share·loser_share / race.max_weekly_shift / race.min_weight / A.ma_fast·ma_slow / B.rsi_buy·rsi_sell`",
               "  定义于 `scripts/optimizer.py ENSEMBLE_GRID`（台账登记小范围搜索，非暴力全域）。",
               ""]
     with open(path, "w", encoding="utf-8") as f:

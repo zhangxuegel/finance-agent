@@ -40,6 +40,15 @@
     出闸三条件在无急跌横盘期过保守（2024–2026 重放 -2.37%、MDD 2.43%）。
   - 待办：仅评估并起草《CRO 放宽确认书》；**未经书面确认不得改台账**。
 
+- [ ] T-Fin27 回归红线失效：撮合时间锁账本审计失败（新发现 2026-10-21）
+  - 现状：`python3 scripts/test_sim.py` → "撮合时间锁：账本逐笔合规" FAIL
+    （checked=186, violations=46）。已验证与 T-Fin24 网格改动无关
+    （旧代码同样 FAIL，属遗留回归）。
+  - 待办：定位 `risk_control.audit_fill_time_lock` 对 data/portfolio.json
+    逐笔的 46 条违规明细，判定是账本脏数据还是撮合真违规；修复后
+    test_sim 必须全绿（铁律 5：next-open 撮合统一记账）。
+  - 风险：合规审计是 T-Fin01/02 的验收基础，优先级高于 T-Fin24 报表输出。
+
 ## 已完成（近期,示例存档）
 
 - [x] T-Fin22 云端看板顶部遮挡修复（968b8fd，UI-only，selftest 全绿）
