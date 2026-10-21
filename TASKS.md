@@ -31,10 +31,13 @@
     （checkout 自带 GITHUB_TOKEN 认证）；并发排队不互杀；workflow_dispatch 手动补跑。
   - 验收：test_sim 全绿 ✔；cloud_gate selftest 11/11 ✔；真账对帐全空残缺
     （eod/fills 双侧一致、零冲突）。
-  - **待业主**（上云三键）：①GitHub repo 设 Public；②Actions Secrets 配
-    SUPABASE_URL/KEY（现轮换版）+ 可选 GLM_API_KEY；③Termux 侧推送通道仍是
-    SSH 无私钥状态（本地 ahead 未推），按拍板"临时换 token"——生成 repo 级
-    PAT 交 Agent 执行 git push 后，云端 workflow 即可自持运行。
+  - ~~**待业主**（上云三键）~~ ✅✅✅ **2026-10-21 全部闭环**：
+    ①repo 已 Public（API 核验 private:false）；②Actions Secrets 已配
+    SUPABASE_URL/KEY（API 密钥列表核验；GLM_API_KEY 可选暂缺，云端日报走 rule
+    兜底）；③临时 PAT（repo+workflow scope）由 Agent 推送成功
+    86ff477..d57342c（19 提交，workflow 文件落库核验 200），
+    云端 workflow 自此自持运行。备忘：首枚 PAT 因缺 workflow scope 被
+    GitHub 拒（refusing to allow … without `workflow` scope），换纹后通过。
 
 
 - [x] T-Fin23 接入 GLM LLM 分析师（✅2026-10-21 完成）
