@@ -18,6 +18,12 @@ T-Fin12 竖屏三视图（顶层三卡：
   · 净值折线图：影子 vs 沪深300（归一化=1，独立起始锚）
   · 最近交易流水表：按 id 倒序 40 笔（涨停拒买单独标旗）
 
+T-Fin22 顶部遮挡修复：
+  · set_page_config 加 initial_sidebar_state="collapsed"（compact 模式）；
+  · CSS 隐藏默认顶部工具栏（header/toolbar/decoration/status），
+    杜绝 Share/编辑栏压住顶部指标卡；
+  · 主内容渲染前加 50px 顶部留白，三卡完整可见。
+
 铁律映射：只读（云端拉取→展示，绝不写库）；一切数字来自 synced 台账行；
 无任何 LLM/人工订单注水——净值/流水全部由本地确定性引擎产出后增量推送。
 """
@@ -47,6 +53,11 @@ _LIGHT_CSS = """
 <style>
 /* —— T-Fin12 手机竖屏紧凑化 —— */
 .block-container {padding: 1.0rem 1.0rem 2.5rem;}
+/* —— T-Fin22 顶部遮挡修复：默认顶部工具栏（Share/编辑栏）整体下架 —— */
+header[data-testid="stHeader"] {display: none;}
+[data-testid="stToolbar"] {display: none;}
+[data-testid="stDecoration"] {display: none;}
+[data-testid="stStatusWidget"] {display: none;}
 [data-testid="stMetric"] {background: rgba(128,128,128,0.08);
   border-radius: 10px; padding: 10px 12px;}
 [data-testid="stMetricLabel"] {font-size: 0.78rem;}
@@ -240,8 +251,12 @@ def _refresh_button():
 def run_app():
     """Streamlit 页面主体（云端入口，竖屏优先）。"""
     st.set_page_config(page_title="影子实盘云端看板",
-                       page_icon="🛰️", layout="centered")
+                       page_icon="🛰️", layout="centered",
+                       initial_sidebar_state="collapsed")
     st.markdown(_LIGHT_CSS, unsafe_allow_html=True)
+    # —— T-Fin22：主内容渲染前顶部留白 50px，指标卡不被任何顶栏遮挡 ——
+    st.markdown("<div style='margin-top: 50px;'></div>",
+                unsafe_allow_html=True)
     url, key, prefix = config_from_env()
     if not url or not key:
         st.error("未配置云端数据库（secrets.toml 或环境变量 SUPABASE_URL/"
