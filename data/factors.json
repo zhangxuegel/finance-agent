@@ -1,17 +1,17 @@
 {
- "date": "2026-10-19",
- "momentum20": -0.07403363179733558,
- "atr14": 0.06794921627211394,
- "atr_pct": 0.016025758554743853,
- "valuation_q": 0.008,
+ "date": "2026-10-21",
+ "momentum20": -0.07472916206057933,
+ "atr14": 0.06761946694729917,
+ "atr_pct": 0.016157578720979494,
+ "valuation_q": 0.004,
  "light": "red",
  "light_label": "🔴 红灯",
- "close": 4.24,
- "rows": 725,
- "score": 7,
+ "close": 4.185,
+ "rows": 726,
+ "score": 6,
  "source": "rule(回放确定性; 回放模式新闻不可回溯（时间锁）)",
  "raw": null,
  "tilt": "none",
  "news_count": 0,
- "generated_at": "2026-10-19"
+ "generated_at": "2026-10-21"
 }
