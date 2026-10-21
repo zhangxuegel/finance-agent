@@ -51,7 +51,15 @@
     接入 RSI14 + ATR% 辅助过滤（rule_score 修订 + 极端情景矩阵回归）；④
     红灯状态机：A/B/D 强制降至 0，E 保留（validate V3 适配）；⑤全量历史回测
     （含黑天鹅重放）+ 策略赛马对比报告。
-- [~] T-Fin30 云端同步失效应急（2026-10-21 诊断完毕，【阻塞·待业主】= Supabase 新密钥）
+- [x] T-Fin30 云端同步失效应急（✅2026-10-21 完成：诊断+放行全闭环）
+  - 诊断（前报）：根因=Supabase 服务端撤销原 secret key（10-20 01:06 成功→
+    13:08 起 401 Unregistered API key）；cron 实证 crond 会执行 spool 任务，
+    crontab 今日 16:20 装载、15:30 时段未到。crond 已守候、原 crontab 已还原。
+  - 放行：业主提供新 sb_secret key → 双写 ~/.finance_agent_cloud +
+    .streamlit/secrets.toml（600）→ `sync_all.sh` upsert **eod +1 行成功**，
+    水位 max_eod_date 推进到 **2026-10-21**；云端回读
+    `sb_shadow_eod` 尾两行 = 10-21 ¥976,312.1 / 10-20 ¥976,273.3 与本地一致。
+  - 后续约定：密钥今后只改两处凭证文件；云端 upsert 幂等，重推无副作用。
   - ① 手动全量收盘流程已跑：run_daily_all.sh 全链绿（fetch/daily_report/ensemble
     --daily/push），eod REPLACE 幂等核验 10-21 行=1；NAV ¥958,266（红灯日 0 交易）。
   - ② **云端根因＝Supabase 密钥失效**（非 cron、非本地缺口）：
@@ -78,8 +86,14 @@
     e) 勿用一键清理/后台管理器划掉 Termux；Android 版本若支持，开启
     " Phantom process killer 关闭 "（`adb shell settings put global
     settings_enable_monitor_phantom_procs false` 或开发者选项关闭"后台进程限制"）。
-  - 验收：本地 eod=10-21 齐（面板数字以本地为准），云端等新密钥放行；cron 明天
-    15:30 首个交易日时段自动首跑并落 data/cron.log 留痕。
+  - 验收：本地 eod=10-21 齐；**云端放行**：业主交新 sb_secret key → 双写
+    ~/.finance_agent_cloud + .streamlit/secrets.toml（600，不回显）→
+    `sync_all.sh` upsert **eod +1 行成功**，水位 max_eod_date 推进到
+    **2026-10-21**；云端回读 sb_shadow_eod 尾两行 = 10-21 ¥976,312.1 /
+    10-20 ¥976,273.3 与本地一致（看板即恢复当日数据）；cron 明日 15:30
+    首个交易日时段自动首跑并落 data/cron.log 留痕。
+  - 后续约定：密钥今后只改两处凭证文件即可（勿重复轮换）；云端 upsert 幂等，
+    重推无副作用。
 - [ ] T-Fin29 急跌门放宽评估（原 T-Fin28 定义顺延，冻结中，需 CRO 书面确认才开工）
 
 - [x] T-Fin27 回归红线失效：撮合时间锁账本审计失败（✅2026-10-21 完成）
