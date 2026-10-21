@@ -24,6 +24,11 @@ import sqlite3
 import string
 import sys
 import csv
+
+
+def _legs_of(st: dict) -> tuple:
+    """台账赛马腿自适应（T-Fin28：D/E 腿并发）；旧双色台账自动回退 A/B。"""
+    return tuple(l for l in ("A", "B", "D", "E") if l in st.get("sleeves", {}))
 from datetime import datetime
 
 BASE = os.path.dirname(os.path.abspath(__file__))
@@ -96,7 +101,7 @@ def collect() -> dict:
     light = LIGHT_LABEL.get(gs.get("light", "green"), LIGHT_LABEL["green"])
     # 腿权益占比（最新台账收盘；C = MASTER 货币 + 母现金）
     vals = {}
-    for leg in ("A", "B"):
+    for leg in _legs_of(st):
         port = st["sleeves"][leg]
         v = port["cash"] + sum(pp["shares"] * (_close_of(c) or pp["cost"])
                                for c, pp in port["positions"].items())

@@ -41,6 +41,19 @@ dividends:
     - {ex_date: 2024-01-18, per_share: 0.069}
     - {ex_date: 2025-06-18, per_share: 0.088}
     - {ex_date: 2026-01-19, per_share: 0.123}
+  # ---- T-Fin28 登记（2026-10-21）：510880 红利ETF 防守腿入场，同口径登记 ----
+  # 来源：东财 fundf10 fhsp_510880 分红送配详情页（2026-10-21 在线核验）
+  "510880":
+    - {ex_date: 2017-01-23, per_share: 0.091}
+    - {ex_date: 2018-01-23, per_share: 0.109}
+    - {ex_date: 2019-01-16, per_share: 0.098}
+    - {ex_date: 2020-01-17, per_share: 0.144}
+    - {ex_date: 2021-01-18, per_share: 0.141}
+    - {ex_date: 2022-01-17, per_share: 0.086}
+    - {ex_date: 2023-01-16, per_share: 0.138}
+    - {ex_date: 2024-01-23, per_share: 0.131}
+    - {ex_date: 2025-01-21, per_share: 0.142}
+    - {ex_date: 2026-01-21, per_share: 0.143}
 anchor:
   # 回测起点锚定建仓（T-Fin01 设计：账本首日按目标等权建仓，不经过信号日收盘机制，
   # 亦不依赖未来价格）。audit_fill_time_lock 仅对该日 BUY 豁免"前一日信号"校验。
@@ -83,16 +96,35 @@ ensemble:
     rsi_period: 14             # RSI14 < 30 买 / > 70 卖
     rsi_buy: 30
     rsi_sell: 70
+  # ---- T-Fin28 新增（2026-10-21 业主指令）：D 震荡网格腿 / E 防守红利腿 ----
+  D:
+    anchor_window: 120         # 网格基线 MA120（确定性，只用 ≤i 收盘）
+    step_pct: 0.03             # 单格步长 3%：跌破基线×0.97 建仓；站上格点×1.03 清仓
+    yellow_ok: true            # T-Fin28 分腿防守矩阵：黄灯=纠缠震荡期=网格用武之地，
+                               # 放行 D 腿交易（红灯/急跌门仍清仓+禁买；trade 打 grid_yellow 标记）
+  E:
+    code: "510880"             # 防守红利腿单标的（.Utilities: 上证红利ETF）
+    secid: "1.510880"
+    name: 上证红利ETF(华泰柏瑞)
+    defensive: true            # [状态机豁免位] 黄/红灯不强清，按自身公式交易
+    ma_window: 60              # 自身公式：close ≥ 自身 MA60 持有，否则空仓
   C:
     code: "511990"             # 货币 ETF（银华日利），黄/红灯或 A/B 双空仓时承接资金
     secid: "1.511990"
     name: 银华日利货币ETF
   race:
     lookback: 20               # 每周末用过去 20 个交易日各策略夏普赛马
+    enable: true               # T-Fin28 登记：false 时冻结赛马（权重=init_weights），
+                               # 仅用于独立策略单跑（race_compare 专用，禁作实盘配置）
+    init_weights: {A: 0.30, B: 0.25, D: 0.25, E: 0.20}   # 热身期/独立单跑的固定分权
+    shares: {t1: 0.35, t2: 0.30, t3: 0.20, t4: 0.15}     # T-Fin28：夏普排名 t1..t4 目标位
+    # legacy（T-Fin03 2 腿口径，race_weights/optimizer 网格仍引用；T-Fin28 起
+    # 实盘由 shares 分位驱动，以下键仅作回放旧台账与寻优网格兼容位）：
     winner_share: 0.7          # 胜者 7 / 败者 3
     loser_share: 0.3
-    max_weekly_shift: 0.2      # 平滑防过拟合：单周权重漂移上限 ±20pp（禁 0→100%）
-    min_weight: 0.3            # 双方权重下限（拒绝 0:10 绝对押注）
+    max_weekly_shift: 0.2      # 平滑防过拟合：单周单腿漂移上限 ±20pp（禁 0→100%）
+    min_weight: 0.10           # T-Fin28：单腿权重下限（防守腿 E 另有 def_floor）
+    def_floor: 0.15            # T-Fin28：防守腿 E 的更高地板（防守永不清零）
   tilt:
     score_high: 80             # LLM 市场信心 >80 → 策略 A 加权
     a_tilt_pp: 0.05
@@ -122,6 +154,9 @@ factor:
   # ---- T-Fin03 新增（登记台账）----
   momentum_window: 20           # 动量 = 近20日涨幅
   atr_period: 14                # 波动率 = ATR14（Wilder）
+  rsi_window: 14                # T-Fin28：强弱因子 = RSI14（Wilder，与 B 腿同源公式）
+  # T-Fin28 辅助过滤立场（rule_score 内实现，语义见其 docstring）：
+  # RSI 过热助推/超卖折价；高 ATR% 仅在下跌动量时罚分（上行 breakout 不罚）。
   # 估值因子替代口径声明：ETF 无市盈率台账，禁用幻觉 PE。
   # 用基准收盘价在近 250 日中的分位（0~1）替代，来源=行情 CSV 确定性计算。
   valuation_window: 250

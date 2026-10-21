@@ -212,3 +212,41 @@ Webhook 预留飞书/Telegram：`FIN_PUSH_URL` 环境变量注入 URL 即切换�
 - `validate_sim.py`：V1–V8 全部通过（新增 V7 因子审计、V8 窗口确定性）；
 - `optimizer.py --ensemble`：报告+台账落盘，拦截机制生效；
 - `crash_test.py`：双情景 PASS（上表）。
+
+## T8. T-Fin28 多策略赛马与因子接入（2026-10-21 完成）
+
+**四腿结构**（`ACTIVE_LEGS=("A","B","D","E")`，E 为防守腿、不参与赛马排名池排名逻辑见 race.def_floor）：
+| 腿 | 策略 | 信号源 | 防守矩阵 |
+|---|---|---|---|
+| A | 趋势双均线 MA20/60 | 510300 | 黄/红+急跌清仓禁买 |
+| B | RSI 均值回归 (14/30/70) | 510300+159915 | 同上 |
+| D | 震荡网格 MA120±3% | 510300 | **黄灯放行**（trade 打 grid_yellow），红/急跌清仓禁买 |
+| E | 防守红利 510880·MA60 | 独立执行位 | **红灯豁免**（trade 打 defensive），前复权+分红台账 |
+
+- **赛马 race_weights4**：每周五收盘按 120 日夏普排名 → 份额 {t1:.35,t2:.30,t3:.20,t4:.15}；
+  max_weekly_shift 0.2、min_weight 0.10、def_floor 0.15（E 保底）。Weekly 频率（业主拍板）。
+- **factor_mining 接入**：compute_factors 加 rsi14（单源复用 ensemble_engine.rsi_series）、
+  rule_score 加 RSI/ATR 辅助过滤；ATR 高波动罚分仅在 momentum20<0 时生效（上行 breakout 豁免）。
+- **510880 分红台账**：params.dividends 10 条（fhsp 在线核验 2017-01-23~2026-01-21，
+  每份 0.091~0.143 元）；审计公式 `raw = qfq + Σ{ex>d} per_share` 互证通过。
+- **资金恒等式**：eq_total = master_cash + MASTER 停泊份额市值 + Σ腿权益；
+  rebalance 注资**先母池后腿**；抽资余数统一回母池（master 是唯一回流位，杜绝腿间环形追讨）。
+  旧 2 腿时代漏计 MASTER 停泊份额 无害（master 现金恒 0），四腿后在 run() 对账中补正。
+
+**V 验收**（validate_sim V0–V12 全绿，37 ✅）：
+- V3 分腿防守矩阵（D 腿 yellow_ok / E 腿 defensive 台账标记核查）；
+- V3f park/redeem 记账行豁免；V3g Σweights == 1−c_buffer；
+- V6 现金空转改为**逐账户**口径（任一账户闲置 < 一手货币 ETF 市值）；
+- 台账行打标修正：place_orders 返回的 orders 与 port["trades"] 是两份独立 dict，
+  leg/defensive/grid_yellow 标记必须打到台账新增行（sleeves[X]["trades"][n0:]）。
+
+**test/audit**：test_sim T28-* 16 项全绿（原 10 项 186 检查保持全绿）；
+factor --test 7/7、--audit 8/8（R1=96 R2=0）；risk_control --audit PASS；
+黑天鹅 crash_test 双情景 PASS（2015 千股跌停 / 2020 美股熔断，data/crash 含 510880 长历史）。
+
+**策略赛马报告**（`scripts/race_compare.py` → `reports/race_T-Fin28_2026-10-21.md`）：
+四腿独立单跑（race.enable=false 单腿满仓）+ 合并赛马 + 2026 年度切片。
+2026 结论：基准 510300 买入持有 **−11.35%**；合并赛马净值 **−4.17%**（MDD 4.40%）；
+独立单跑 A/B −1.71%（全年持币，急跌门 60 日高点回归未放开）、D −2.95%（黄灯网格 4 笔）、
+E −1.71%（防守红利 9 笔）；周赛马夺冠 E=22 次（41 周）。注：单跑口径含 park/redeem
+换手磨损（灯色翻转每次 ~2×滑点+费），为既有 T-Fin04 防守设计的诚实代价。

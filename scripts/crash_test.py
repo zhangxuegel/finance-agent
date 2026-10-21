@@ -229,9 +229,9 @@ def run_scenario(sc: dict, today: str) -> dict:
 def _holdings_series(eng, st, dates):
     """流水重建：每日期的腿敞口占比（A/B）与货币份额持仓（C 腿台账）。"""
     idx_eq = {d: e for d, e in st["curve"]}
-    legs = ("A", "B")
+    legs = tuple(l for l in ("A", "B", "D", "E") if l in st.get("sleeves", {}))  # T-Fin28 自适应
     core_held = {leg: {} for leg in legs}       # code -> shares
-    money = {"A": 0, "B": 0, "MASTER": 0}
+    money = {**{l: 0 for l in ("A", "B", "D", "E")}, "MASTER": 0}
     sleeve_tr = {leg: sorted(st["sleeves"][leg]["trades"],
                              key=lambda t: t["date"]) for leg in legs}
     ti = {leg: 0 for leg in legs}

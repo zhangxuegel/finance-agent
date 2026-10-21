@@ -106,7 +106,9 @@ def stage_plan_push(replay: bool = False) -> str:
                 if plan["mode"].get("reason") else ""),
              f"- 赛马待执行：{'是 → 开盘赎回+按权重再分配' if plan['race_pending'] else '否'}",
              f"- 建议信号（上一交易日收盘生成）：A 腿 {plan['prev_sig']['A']}, "
-             f"B 腿 {plan['prev_sig']['B']}",
+             f"B 腿 {plan['prev_sig']['B']}, "
+             f"D 腿（网格）{plan['prev_sig'].get('D', {})}, "
+             f"E 腿（防守红利 {plan['def_leg'].get('code')}）{plan['prev_sig_e']}",
              "- 执行纪律：09:30 真实开盘价撮合；**跌停标的当日禁买**；"
              "降级模式下放弃开新交易；两条熔断绝对规则继承。", "",
              "---", "", "### 台账溯源（本次预案引用）", "",

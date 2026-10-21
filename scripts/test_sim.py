@@ -169,6 +169,74 @@ else:
 
 # ----------------------------------------------------------------
 risk_control.save({"locked": False, "lock_until_day": 0, "alarm_days": []})
+
+# ================================================================ T-Fin28 新增
+# ---- 10) D 震荡网格腿：咬合/解除/格点重置（纯函数，确定性） ----
+import ensemble_engine as ee
+
+# 形状：130 日横盘 @10 → 单日 -4%（跌破 MA120×0.97 → 咬合建仓，格点=9.6）→
+# 3 日 +3.1%（站上格点×1.03 → 清仓重布网）→ 再深跌一字（二次咬合）
+up_osc = [10.0] * 130
+up_osc += [9.6, 9.62, 9.9, 10.4]      # 单日跌破 → 数日内收回突破格点 → 清仓
+sig = ee.signals_grid(up_osc, anchor_window=120, step_pct=0.03)
+buys = [i for i in range(1, len(sig)) if sig[i] == 1 and sig[i - 1] == 0]
+sells = [i for i in range(1, len(sig)) if sig[i] == 0 and sig[i - 1] == 1]
+check("T28-1 网格咬合：MA120 基线下探 -3% 建仓", buys == [130], f"buys={buys}")
+check("T28-2 网格解除：站上格点×1.03 清仓", len(sells) >= 1, f"sells={sells}")
+if buys and sells:
+    check("T28-3 网格先买后卖（无裸卖）", buys[0] < sells[0])
+    check("T28-4 网格持仓段连续（中间无悬空置零）",
+          all(sig[i] == 1 for i in range(buys[0], sells[0])))
+# ---- 11) E 防守红利腿：自身 MA60 公式 ----
+import ensemble_engine as _ee
+rise50 = [1.0 + 0.01 * i for i in range(80)]      # 80 日缓涨：第 61 日起 ≥ MA60
+sd = _ee.signals_defensive(rise50, ma_window=60)
+check("T28-5 防守红利：历史不足期全空", all(v == 0.0 for v in sd[:59]))
+check("T28-6 防守红利：越过自身 MA60 → 持有", sd[70] == 1.0, f"sd70={sd[70]}")
+sid = _ee.signals_defensive([100.0] * 40 + [100.0 * (1 - 0.002 * i) for i in range(40)], 60)
+check("T28-7 防守红利：跌破 MA60 → 空仓", sid[-1] == 0.0, f"last={sid[-1]}")
+# ---- 12) race_weights4：4 腿赛马不变量（Σw = 1-c_buffer；地板；漂移帽） ----
+cfg = {"race": {"min_weight": 0.10, "def_floor": 0.15, "max_weekly_shift": 0.2,
+                "shares": {"t1": 0.35, "t2": 0.30, "t3": 0.20, "t4": 0.15},
+                "init_weights": {"A": 0.30, "B": 0.25, "D": 0.25, "E": 0.20}},
+       "tilt": {"score_high": 80, "a_tilt_pp": 0.05, "score_low": 20,
+                "c_tilt_pp": 0.10}}
+prev = {"A": 0.30, "B": 0.25, "D": 0.25, "E": 0.20}
+w = ee.race_weights4(prev, {"A": 2.0, "B": 1.0, "D": 0.5, "E": 0.1}, cfg)
+check("T28-8 4腿赛马 Σw==1 且紧凑（平局按固定序）", abs(sum(w["weights"].values()) - 1) < 1e-9,
+      f"w={w['weights']}")
+check("T28-9 防守腿地板 def_floor=0.15", w["weights"]["E"] >= 0.15 - 1e-9,
+      f"E={w['weights']['E']}")
+w2 = ee.race_weights4(prev, {"A": -9.0, "B": 2.0, "D": 1.0, "E": -1.0}, cfg)
+check("T28-10 排名驱动：B(夏普最佳)得 t1=0.35，E(第3名)得 t3=0.20",
+      abs(w2["weights"]["B"] - 0.35) < 1e-6 and abs(w2["weights"]["E"] - 0.20) < 6e-2,
+      f"w={w2['weights']}")
+w3 = ee.race_weights4(prev, {"A": None, "B": None, "D": None, "E": None}, cfg)
+check("T28-11 热身不足 → init_weights 固定分权", abs(w3["weights"]["B"] - 0.25) < 1e-9,
+      f"w={w3['weights']}")
+w4 = ee.race_weights4(prev, {"A": 2.0, "B": 1.0, "D": 0.5, "E": 0.1}, cfg,
+                      factor_score=80)
+check("T28-12 LLM 倾斜：score≥80 → A 加权且 Σw==1", w4["weights"]["A"] >= w["weights"]["A"],
+      f"A {w4['weights']['A']} vs neutral {w['weights']['A']}")
+w5 = ee.race_weights4(prev, {"A": 2.0, "B": 1.0, "D": 0.5, "E": 0.1}, cfg,
+                      factor_score=15)
+check("T28-13 LLM 预配：score≤20 → c_buffer=0.10 且 Σw==0.9",
+      abs(sum(w5["weights"].values()) - 0.9) < 1e-9 and w5["c_buffer"] == 0.10,
+      f"w={w5['weights']}")
+# ---- 13) factor 过滤：ATR% 罚分仅在下跌动量；极端矩阵保持 ----
+base_f = {"momentum20": 0.0, "light": "green", "valuation_q": 0.5,
+          "rsi14": 50.0, "atr_pct": 0.005}
+f_hi = dict(base_f, atr_pct=0.03)
+f_mid = dict(base_f, atr_pct=0.015)
+check("T28-14 上行高波动不罚（=中性波动；低波动才有低波加分）",
+      __import__("factor_mining").rule_score(f_hi) == __import__("factor_mining").rule_score(f_mid))
+f_lo = dict(base_f, momentum20=-0.15, light="red", rsi14=25.0, atr_pct=0.03)
+check("T28-15 下跌+高波动 → 罚分生效且落 0..10", __import__("factor_mining").rule_score(f_lo) <= 10)
+f_bull = {"momentum20": 0.20, "light": "green", "valuation_q": 1.0,
+          "rsi14": 99.0, "atr_pct": 0.06}
+check("T28-16 极端牛市 R1：≥90", __import__("factor_mining").rule_score(f_bull) >= 90)
+
+# ----------------------------------------------------------------
 print("=" * 50)
 if FAILS:
     print(f"test_sim 结果: {len(FAILS)} 失败 → {FAILS}")

@@ -29,3 +29,10 @@
   secid: "1.511990"
   kind: etf
   exclude_core: true           # 仅 ensemble 的 C（货币腿）使用；T-Fin01 核心引擎不调仓它
+
+- code: "510880"               # ---- T-Fin28 登记红线：防守红利腿专用 ----
+  name: 上证红利ETF(华泰柏瑞)
+  secid: "1.510880"
+  kind: etf
+  exclude_core: true           # 仅 ensemble 的 E（防守红利腿）使用；T-Fin01 核心引擎不调它
+  defensive: true              # E 腿独占：黄/红灯强制清仓豁免位（信号仍出自其自身数学公式）

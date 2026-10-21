@@ -22,6 +22,11 @@ sys.path.insert(0, BASE)
 
 import live_data_feed as feed
 
+
+def _legs_of(st: dict) -> tuple:
+    """台账赛马腿自适应（T-Fin28：D/E 腿并发）；旧双色台账自动回退 A/B。"""
+    return tuple(l for l in ("A", "B", "D", "E") if l in st.get("sleeves", {}))
+
 DB = os.path.join(ROOT, "data", "shadow_live.db")
 STATE = os.path.join(ROOT, "data", "shadow_state.json")
 REPORTS = os.path.join(ROOT, "reports")
@@ -50,7 +55,7 @@ def _light_by_date(eng) -> dict:
 def _leg_day_returns(st: dict) -> dict:
     """腿级日收益 dict[leg][date] = ret（来自 ledger 的腿级权益曲线）。"""
     out = {}
-    for leg in ("A", "B"):
+    for leg in _legs_of(st):
         curve = st["sleeves"][leg].get("curve", [])
         rets = {}
         for i in range(1, len(curve)):
@@ -65,7 +70,7 @@ def winrate_grid(leg_rets: dict, lights: dict, n_days: int) -> list[dict]:
     """纯函数：腿级日收益 × 灯色 → A/B ×（黄/绿）局部胜率网格（可单测）。
     窗口语义：先取最近 n_days 个台账日，再按当日灯色分组（红灯不含在内）。"""
     out = []
-    for leg in ("A", "B"):
+    for leg in ("A", "B", "D", "E"):   # T-Fin28 四腿；leg_rets 缺席的腿自动跳过
         all_days = sorted(leg_rets.get(leg, {}).items())
         window = all_days[-n_days:]
         for light in ("yellow", "green"):

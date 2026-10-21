@@ -25,6 +25,11 @@ STATE = os.path.join(ROOT, "data", "ensemble_state.json")
 REPORTS = os.path.join(ROOT, "reports")
 
 
+def _legs_of(st: dict) -> tuple:
+    """台账赛马腿自适应（T-Fin28：D/E 腿并发）；旧双色台账自动回退 A/B。"""
+    return tuple(l for l in ("A", "B", "D", "E") if l in (st or {}).get("sleeves", {}))
+
+
 def _light(asof: str | None = None) -> dict:
     kl = fetch_data.load_csv("510300")
     if asof:
@@ -57,11 +62,12 @@ def daily(asof: str | None = None) -> str:
     pnl = eq / yesterday - 1 if yesterday else 0.0
     eng = __import__("ensemble_engine").EnsembleEngine()
     money_px = eng.money_px.get(date) or (st["money"].get("last_px") or 0.0)
-    money_val = sum(st["money"].get(k, 0) for k in ("A", "B", "MASTER")) * money_px
+    money_val = sum(st["money"].get(k, 0)
+                     for k in _legs_of(st) + ("MASTER",)) * money_px
     pos_val = 0.0
     rows = ["| 腿 | 持仓 | 市值占比 |", "|---|---|---|"]
     names = {w["code"]: w["name"] for w in eng.watch}
-    for leg in ("A", "B"):
+    for leg in _legs_of(st):
         port = st["sleeves"][leg]
         leg_val = port["cash"]
         if port["positions"]:
@@ -82,7 +88,7 @@ def daily(asof: str | None = None) -> str:
     if st["money"]["MASTER"]:
         rows.append(f"| 母·C货(511990) | {st['money']['MASTER']:,} 股 | "
                     f"{st['money']['MASTER'] * money_px / eq * 100:.1f}% |")
-    idle = st["master_cash"] + sum(st["sleeves"][l]["cash"] for l in ("A", "B"))
+    idle = st["master_cash"] + sum(st["sleeves"][l]["cash"] for l in _legs_of(st))
     sa = st["race_log"][-1] if st["race_log"] else {}
     lines = [f"# T-Fin04 每日晨报 · {date}", "",
              f"> 生成 {datetime.now():%F %H:%M} · 数字源：system台账（LLM 未经手）", "",
@@ -130,7 +136,7 @@ def weekly(asof: str | None = None) -> str:
     leg_rows, comp = ["| 腿 | 本周收益 | 期末权益 |", "|---|---|---|"], {}
     eng = __import__("ensemble_engine").EnsembleEngine(log_writes=False)
     eq_sign = 0.0
-    for leg in ("A", "B"):
+    for leg in _legs_of(st):
         lc = st["sleeves"][leg]["curve"]
         lidx = {d: e for d, e in lc}
         seg = [(d, e) for d, e in lc if week_start_race <= d <= asof and e]

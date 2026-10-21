@@ -9,6 +9,7 @@ Termux 无 numpy 依赖，用 min/max 同口径实现），任何异常自动降
   动量因子   momentum20 = close[-1]/close[-21] - 1
   波动率因子 atr14      = Wilder ATR(14)，atr_pct = atr/close
   估值因子   valuation_q = 基准收盘在近 250 日中的分位（0~1）
+  强弱因子   rsi14      = Wilder RSI(14)（T-Fin28 接入，辅助过滤位）
   ---- 估值因子替代口径声明（台账 factor.valuation_window）----
   ETF 无市盈率台账，为禁用幻觉 PE，采用"价格分位"替代估值热度的确定性代理。
 
@@ -61,6 +62,18 @@ def atr_series(klines: list[dict], period: int = 14) -> list[float | None]:
     return out
 
 
+def rsi_now(closes: list[float], period: int = 14) -> float | None:
+    """Wilder RSI 最新值（T-Fin28 辅助过滤位）。
+
+    单一公式纪律：直接复用 ensemble_engine.rsi_series（赛马 B 腿同源），
+    禁止双份实现漂移；序列尾部取最后一个非 None。"""
+    from ensemble_engine import rsi_series      # 函数级 import（防循环依赖）
+    for v in reversed(rsi_series(closes, period)):
+        if v is not None:
+            return v
+    return None
+
+
 def compute_factors(asof: str | None = None, params: dict | None = None) -> dict:
     p = params or fetch_data.load_params()
     bench_code = p["benchmark"]["code"]
@@ -70,11 +83,13 @@ def compute_factors(asof: str | None = None, params: dict | None = None) -> dict
     w_mom = p["factor"]["momentum_window"]
     w_atr = p["factor"]["atr_period"]
     w_val = p["factor"]["valuation_window"]
+    w_rsi = int(p["factor"].get("rsi_window", 14)) or 14
 
     momentum20 = closes[-1] / closes[-1 - w_mom] - 1 if len(closes) > w_mom else None
     atrs = atr_series(kl, w_atr)
     atr14 = atrs[-1]
     atr_pct = atr14 / closes[-1] if atr14 else None
+    rsi14 = rsi_now(closes, w_rsi)
 
     _clip_win = closes[-w_val:]
     if len(_clip_win) >= 20:
@@ -84,7 +99,7 @@ def compute_factors(asof: str | None = None, params: dict | None = None) -> dict
 
     light = regime_filter.traffic_light(closes)
     return {"date": kl[-1]["date"], "momentum20": momentum20, "atr14": atr14,
-            "atr_pct": atr_pct, "valuation_q": q,
+            "atr_pct": atr_pct, "rsi14": rsi14, "valuation_q": q,
             "light": light["state"], "light_label": light["light"],
             "close": closes[-1], "rows": len(kl)}
 
@@ -113,12 +128,29 @@ def _clip(v: float, lo: float, hi: float) -> float:
 
 
 def rule_score(f: dict) -> int:
+    """规则打分（T-Fin28 升级：+RSI14 强弱过滤 +ATR% 波动率过滤）。
+
+    辅助过滤的饱和区间设计（台账 factor.filter_tilt 在此登记语义）：
+      · RSI14：>60 → +6；45~60 → +2；30~45 → -2；<30 → -6（过热助推/超卖折价）
+      · ATR%：≥2.5%（高波动）→ 仅当 momentum20 < 0 时 -8（下跌中的高波动=崩盘
+        风险；上行突破的高波动不罚，保 R1 饱和）；≤0.8%（低波动）→ +2（温和加分）
+    终值仍整体 _clip[0,100]；极端情景（10 连板 / 10 连暴跌）由动量与灯色项
+    主导并饱和 → 因子审计矩阵 R1/R2 语义不变。"""
     s = 50.0
     if f.get("momentum20") is not None:
         s += _clip(f["momentum20"] / 0.10, -1, 1) * 25
     s += {"green": 10, "yellow": -5, "red": -20}[f.get("light", "yellow")]
     if f.get("valuation_q") is not None:
         s += (f["valuation_q"] - 0.5) * 10
+    rsi = f.get("rsi14")
+    if rsi is not None:
+        s += 6 if rsi > 60 else 2 if rsi > 45 else -2 if rsi > 30 else -6
+    atr_pct = f.get("atr_pct")
+    if atr_pct is not None:
+        if atr_pct >= 0.025 and (f.get("momentum20") or 0.0) < 0:
+            s -= 8
+        elif atr_pct <= 0.008:
+            s += 2
     return int(round(_clip(s, 0, 100)))
 
 
@@ -126,7 +158,9 @@ def rule_score(f: dict) -> int:
 # LLM 打分（GLM OpenAI 兼容；三层防线：解析→范围→候选兜底）
 PROMPT = ("你是量化因子分析师。基于给定的因子数据和新闻，输出一个 [0, 100] 的"
           "市场信心得分。若得分 > 80，建议调高策略 A 权重；若 < 20，"
-          "建议调高策略 C 权重。只输出结构化 JSON，严禁回复任何解释性废话。")
+          "建议调高策略 C 权重。只输出结构化 JSON，严禁回复任何解释性废话。"
+          "格式唯一合法形式：{\"score\": 整数}——键名必须是 score，"
+          "禁止使用 market_confidence_score 等任何其他键名。")
 
 
 def llm_score(factors: dict, news: list[str], params: dict | None = None,
@@ -138,8 +172,8 @@ def llm_score(factors: dict, news: list[str], params: dict | None = None,
     p = params or fetch_data.load_params()
     key_env = p["llm"]["api_key_env"]
     payload = {"factors": {k: factors.get(k) for k in
-                           ("date", "momentum20", "atr_pct", "valuation_q",
-                            "light")},
+                           ("date", "momentum20", "atr_pct", "rsi14",
+                            "valuation_q", "light")},
                "news": [t for t in news[:p["factor"]["news_max"]]]}
     if resp is None:
         key = os.environ.get(key_env)
@@ -194,8 +228,16 @@ def _parse_score(resp: str, factors: dict) -> dict:
         txt = (resp or "").strip()
         txt = re.sub(r"^```(json)?|```$", "", txt, flags=re.M).strip()
         data = json.loads(txt)
-        raw = data["score"] if isinstance(data, dict) and "score" in data \
-            else (data if isinstance(data, (int, float)) else None)
+        # 键名容错：某些模型会把 score 命名为 market_confidence_score
+        if isinstance(data, dict):
+            for _k in ("score", "market_confidence_score"):
+                if _k in data:
+                    raw = data[_k]
+                    break
+            else:
+                raw = None
+        elif isinstance(data, (int, float)):
+            raw = data
         if not isinstance(raw, (int, float)) or isinstance(raw, bool) \
                 or math.isnan(raw):
             raise ValueError("score 非数值")
@@ -229,8 +271,10 @@ def compute_factors_from(klines: list[dict], params: dict | None = None) -> dict
     win = closes[-w_val:]
     q = sum(1 for v in win if v <= closes[-1]) / len(win) if len(win) >= 20 else None
     light = regime_filter.traffic_light(closes)
+    rsi = rsi_now(closes, int(p["factor"].get("rsi_window", 14)) or 14)
     return {"date": klines[-1]["date"], "momentum20": momentum20, "atr14": atr14,
-            "atr_pct": atr_pct, "valuation_q": q, "light": light["state"],
+            "atr_pct": atr_pct, "rsi14": rsi, "valuation_q": q,
+            "light": light["state"],
             "light_label": light["light"], "close": closes[-1], "rows": len(klines)}
 
 

@@ -102,17 +102,44 @@ if os.path.exists(os.path.join(BASE, os.pardir, "data", "ensemble_state.json")):
     light_of = {d: eng.light_at(i)["state"]
                 for i, d in enumerate(eng.dates) if i >= eng.warmup}
     viol = 0
-    for leg in ("A", "B"):
+    for leg in ("A", "B", "D"):                       # T-Fin28：核心腿全扫
         for t in st["sleeves"][leg]["trades"]:
             if t["side"] == "BUY" and light_of.get(t["date"]) in ("yellow", "red"):
+                # T-Fin28 例外位：D 腿黄灯网格交易放行（台账 D.yellow_ok，
+                # 须带 grid_yellow 标记且非红灯）；E 防守腿不在此范围
+                if leg == "D" and light_of.get(t["date"]) == "yellow" \
+                        and t.get("grid_yellow"):
+                    continue
                 viol += 1
-    check("V3e 全流水：黄/红灯日零 BUY", viol == 0, f"违规笔数={viol}")
-    money_total = sum(st["money"].get(k, 0) for k in ("A", "B", "MASTER"))
+    check("V3e 全流水：黄灯仅 D(网格)标记放行+红灯日零 BUY（E 防守腿豁免）",
+          viol == 0, f"违规笔数={viol}")
+    # V3f（T-Fin28）：E 防守腿黄/红灯 BUY 必须打 defensive 标记（豁免位可审计；
+    # reason=park 的货币 ETF 停泊流水属于 C 腿机制的记账行，不计入 E 策略违约）
+    viol_e = sum(1 for t in st["sleeves"].get("E", {}).get("trades", [])
+                 if t["side"] == "BUY"
+                 and light_of.get(t["date"]) in ("yellow", "red")
+                 and not t.get("defensive") and t.get("reason") != "park")
+    check("V3f E 防守腿黄/红灯 BUY 必为 defensive 标记（park 记账行豁免）", viol_e == 0,
+          f"违规笔数={viol_e}")
+    # V3g（T-Fin28）：赛马权重恒等式 Σweights == 1 - c_buffer（race_log 全程）
+    bad_w = sum(1 for tr in st["race_log"]
+                if abs(sum(tr.get("weights", {}).values())
+                       - (1 - tr.get("c_buffer", 0))) > 2e-3)
+    check("V3g 赛马权重进出口恒等：Σweights == 1 - c_buffer", bad_w == 0,
+          f"violation_rows={bad_w}/{len(st['race_log'])}")
+    money_total = sum(st["money"].get(k, 0) for k in ("A", "B", "D", "E", "MASTER"))
     px = eng.money_px[st["last_date"]]
     lot_value = px * P["trading_rule"]["lot"]
-    idle = st["master_cash"] + st["sleeves"]["A"]["cash"] + st["sleeves"]["B"]["cash"]
-    check("V6 现金空转核查：无现金 ≥ 一手货币 ETF 市值", idle < lot_value,
-          f"闲置现金 ¥{idle:,.2f} < 一手约 ¥{lot_value:,.0f}")
+    legs4 = tuple(l for l in ("A", "B", "D", "E") if l in st.get("sleeves", {}))
+    idle_each = {"MASTER": st["master_cash"], **{l: st["sleeves"][l]["cash"]
+                                                 for l in legs4}}
+    worst = max(idle_each, key=idle_each.get)
+    # T-Fin28 口径修订：四腿并发后单腿 < 一手的停泊残差允许跨腿合计 > 一手，
+    # 空转判据改为【任一账户闲置现金须 < 一手货币 ETF 市值】（逐账户最严者）
+    check("V6 现金空转核查：任一账户闲置 < 一手货币 ETF 市值",
+          idle_each[worst] < lot_value,
+          f"最大闲置 {worst} ¥{idle_each[worst]:,.2f} < 一手约 ¥{lot_value:,.0f} "
+          f"(合计 ¥{sum(idle_each.values()):,.2f})")
 else:
     print("⏭ V3e/V6（需先跑 ensemble --daily 生成台账状态）")
 

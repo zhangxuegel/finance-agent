@@ -41,7 +41,17 @@
 - [x] T-Fin26 冻结收尾归档（✅2026-10-21 完成：reports/freeze_2026-10-21.md +
   reports/freeze_2026-10-21.sha256 八文件指纹锁定（活台账 TASKS.md 由 git 定格）；原急跌门评估稿顺延为 T-Fin28 冻结）
 
-- [ ] T-Fin28 急跌门放宽评估（顺延自 T-Fin26 原定义，冻结中，需 CRO 书面确认才开工）
+- [x] T-Fin28 多策略赛马与因子接入（✅业主 2026-10-21 书面改版：原“急跌门放宽评估”
+  顺延为 T-Fin29，冻结中、需 CRO 书面确认才开工。**2026-10-21 完成**：四腿 D 网格+E 红利、
+  factor RSI14/ATR 接入、validate 37✅ 全绿、crash 双 PASS、race_compare 赛马报告
+  reports/race_T-Fin28_2026-10-21.md；文档 docs/ensemble_and_factor.md §T8）
+  - 交付范围：①新增 D 腿（震荡网格：MA120 基线 ±3% 单格级联；RSI 腿 B 保留，
+    4 腿 A/B/D/E 周赛马按 20 日夏普分权）；②E 腿（防守红利：510880 红利ETF，
+    台账登记真实分红历史 + defensive 标记，红灯不清仓豁免）；③factor_mining
+    接入 RSI14 + ATR% 辅助过滤（rule_score 修订 + 极端情景矩阵回归）；④
+    红灯状态机：A/B/D 强制降至 0，E 保留（validate V3 适配）；⑤全量历史回测
+    （含黑天鹅重放）+ 策略赛马对比报告。
+- [ ] T-Fin29 急跌门放宽评估（原 T-Fin28 定义顺延，冻结中，需 CRO 书面确认才开工）
 
 - [x] T-Fin27 回归红线失效：撮合时间锁账本审计失败（✅2026-10-21 完成）
   - 根因：账本(created 2026-10-19)按腾讯 raw 不复权口径记账；10-21 大重抓把

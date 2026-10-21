@@ -20,6 +20,11 @@ import os
 import sys
 from datetime import datetime
 
+
+def _legs_of(st: dict) -> tuple:
+    """台账赛马腿自适应（T-Fin28：D/E 腿并发）；旧双色台账自动回退 A/B。"""
+    return tuple(l for l in ("A", "B", "D", "E") if l in (st or {}).get("sleeves", {}))
+
 BASE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(BASE)
 sys.path.insert(0, BASE)
@@ -95,7 +100,7 @@ def do_panic(reason: str = "") -> dict:
             p = eng.params
             slip = p["fees"]["slippage_bps"] / 10000
             trade_date = now.strftime("%F")
-            for leg in ("A", "B"):
+            for leg in _legs_of(st):
                 port = st["sleeves"][leg]
                 for code in list(port["positions"]):
                     pos = port["positions"][code]
