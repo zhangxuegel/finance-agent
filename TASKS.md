@@ -12,12 +12,16 @@
 
 ## 未完成任务（2026-10-21 核定）
 
-- [~] T-Fin23 接入 GLM LLM 分析师（风控官点评 + 因子分）
-  - 状态（2026-10-21）：**等待用户提供 GLM_API_KEY（约定等待 ≤15 分钟，会话保持，不退出）**。
-  - 已锁基线：receipt sha256 冻结指纹 `reports/freeze_2026-10-21.sha256`（8/8 OK），
-    key 到位后按三步执行：①写到 ~/.profile（不进 git）②llm_review/llm_score 单点
-    安全验收（不推进台账）③crontab 顶部 env 注入（先展示再改）。
-  - Key 格式：智谱 open.bigmodel.cn 两段式原文（`32位.16位`，不带 Bearer 前缀）。
+- [x] T-Fin23 接入 GLM LLM 分析师（✅2026-10-21 完成）
+  - 交付：①key 注入 `~/.bashrc` export GLM_API_KEY（用户自置，不进 git）；
+    ②单点安全验收：`daily_report.llm_review` → `mode: llm`、真实回复语义正确
+    （CRO 四问通路 endpoint/key/model 三打通，model=glm-4-flash）；因子链
+    `factor_mining.llm_score` 真实调用穿透至 `_guarded` 硬逻辑闸——极端牛市
+    LLM 未给 90+ → `overridden(硬规则接管)`，**防幻觉硬闸实弹生效**（设计
+    行为，pipeline 不崩）；③crontab 头部 env 注入（用户自置，单用户本地作用域）。
+  - 影响面：`daily_report` 的 CRO 点评从 rule 兜底升级为真实 GLM（下一交易日
+    15:30 cron 自动生效）；因子分链路可用（实盘日 LLM+新闻）。红线不动：
+    LLM 无下单权，输出只进 tilt 位/reports 文字区。
 
 - [x] T-Fin24 优化器网格全 OOS 崩塌问题（✅2026-10-21 完成，走验收分支 b"有台账依据的维持拦截"）
   - 交付：a) `ENSEMBLE_GRID` 16→48 组，新增 `race.winner_share·loser_share`
