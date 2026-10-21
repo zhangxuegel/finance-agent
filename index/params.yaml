@@ -32,6 +32,20 @@ strategy:
     n_std: 2.0                 # 标准差倍数
     exit: mid                  # 触中轨离场（可选 "mid"）
 
+# T-Fin27 登记区块（2026-10-21）：分红与开局锚点 —— audit_fill_time_lock 口径自洽所需
+dividends:
+  # 现金分红台账（每股派现）。来源：东方财富基金分红公告页 fhsp（2026-10-21 在线核验）。
+  # 维护规则：标的每次除息须人工在此登记，audit 会以 raw = qfq + Σ{除息日>d} 每股分红
+  # 反推不复权口径——未登记的新除息会令审计报"价格不符"（这是特性：提醒补台账）。
+  "510300":
+    - {ex_date: 2024-01-18, per_share: 0.069}
+    - {ex_date: 2025-06-18, per_share: 0.088}
+    - {ex_date: 2026-01-19, per_share: 0.123}
+anchor:
+  # 回测起点锚定建仓（T-Fin01 设计：账本首日按目标等权建仓，不经过信号日收盘机制，
+  # 亦不依赖未来价格）。audit_fill_time_lock 仅对该日 BUY 豁免"前一日信号"校验。
+  date: "2023-11-17"
+
 positions:
   # 目标权重：持仓时等权分配，1/n_assets（由脚本按 watchlist 求倒数）
   target_weight: 0.25          # 登记参考值 = 1 / 当前资产数（watchlist）

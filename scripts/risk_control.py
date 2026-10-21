@@ -118,13 +118,17 @@ def audit_no_lookahead(params: dict | None = None,
 
 def audit_fill_time_lock(params: dict | None = None,
                          port_state: dict | None = None) -> dict:
-    """【撮合口径时间锁】逐笔核对成交账本：
+    """【撮合口径时间锁】逐笔核对成交账本（T-Fin27 口径自洽版）：
 
-      1. BBB 成交价必须 = 成交日 open×(1+slip)；SELL = open×(1-slip)
-         （熔断强平为例外：close×(1-slip)，账本带 forced 标记）
-      2. 普通成交必须有信号依据：成交日的**前一交易日**信号必须与方向一致
-         （BUY ⇔ prev_sig=1，SELL ⇔ prev_sig=0）——即"信号日收盘生成、
-         次日开盘撮合"，绝不允许当日信号当日成交。
+      0. 复权口径：台账成交价 = 不复权 raw 口径（git e6f93c9 可证）。当前 CSV 为
+         东财前复权（fqt=1），故审计先把 CSV 反推回 raw：
+         raw(d) = qfq(d) + Σ{已登记分红、除息日>d 的每股派现}（分红台账 params.dividends；
+         该反推对"未来新登记分红"具有不变性——补登不减旧，除息须及时登记）。
+      1. BUY 价必须 = 成交日 raw_open×(1+slip)；SELL = raw_open×(1-slip)
+         （熔断强平例外：raw_close×(1-slip)，账本带 forced 标记）
+      2. 普通成交必须有信号依据：成交日**前一交易日**（raw 口径信号）须与方向一致
+         （BUY ⇔ prev_sig=1，SELL ⇔ prev_sig=0）——"信号日收盘生成、次日开盘撮合"。
+         例外：params.anchor.date 的首日等权锚定建仓（T-Fin01 设计，登记在台账）。
     """
     import fetch_data
     import strategy
@@ -134,6 +138,8 @@ def audit_fill_time_lock(params: dict | None = None,
     slip = p["fees"]["slippage_bps"] / 10000
     # 账本价格按 4 位小数入账（round(px,4)，最大舍入误差 5e-5）→ 审计容差对齐该口径
     TOL = 5.1e-5
+    div = p.get("dividends") or {}
+    anchor_date = (p.get("anchor") or {}).get("date")
     port = port_state or portfolio.load_state()
     assert port and port.get("trades"), "账本为空，无法审计撮合时间锁"
 
@@ -141,9 +147,21 @@ def audit_fill_time_lock(params: dict | None = None,
     sigs: dict[str, dict[str, float]] = {}
     prev_day_map: dict[str, dict[str, str]] = {}
 
+    def _recode(code: str):
+        """把前复权 CSV 重构为不复权 raw 口径。"""
+        kl = fetch_data.load_csv(code)
+        evs = sorted(str(e.get("ex_date")) for e in div.get(code, []))
+        out = []
+        for k in kl:
+            rebase = sum(float(str(div[code][j].get("per_share", 0)))
+                         for j in range(len(evs)) if evs[j] > k["date"])
+            out.append({**k, "open": k["open"] + rebase, "close": k["close"] + rebase,
+                        "high": k["high"] + rebase, "low": k["low"] + rebase})
+        return out
+
     def ensure(code: str):
         if code not in cache:
-            kl = fetch_data.load_csv(code)
+            kl = _recode(code)
             cache[code] = {k["date"]: k for k in kl}
             sig = strategy.signals_for(code, kl, p["strategy"])
             sigs[code] = {s["date"]: s["signal"] for s in sig}
@@ -151,6 +169,7 @@ def audit_fill_time_lock(params: dict | None = None,
             prev_day_map[code] = {dates_in[i]: dates_in[i - 1] for i in range(1, len(dates_in))}
 
     bad = []
+    exempt_anchor: set[tuple[str, str]] = set()
     for t in port["trades"]:
         ensure(t["code"])
         row = cache[t["code"]].get(t["date"])
@@ -160,10 +179,13 @@ def audit_fill_time_lock(params: dict | None = None,
         if t["side"] == "BUY":
             expect = row["open"] * (1 + slip)
             prev_sig = sigs[t["code"]].get(prev_day_map[t["code"]].get(t["date"], ""))
-            if abs(t["price"] - expect) > TOL:
-                bad.append({**t, "why": f"买价≠当日开×(1+slip)（{t['price']} vs {expect:.6f}）"})
-            if prev_sig is None or abs(prev_sig - 1.0) > 1e-12:
+            if anchor_date and t["date"] == str(anchor_date):
+                # 台账登记的开局锚定建仓（T-Fin01 设计）：豁免前一日信号校验
+                exempt_anchor.add((str(t["code"]), str(t["date"])))
+            elif prev_sig is None or abs(prev_sig - 1.0) > 1e-12:
                 bad.append({**t, "why": "BUY 缺少前一交易日的满仓信号（时间锁违规）"})
+            if abs(t["price"] - expect) > TOL:
+                bad.append({**t, "why": f"买价≠当日开×(1+slip)（{t['price']} vs {expect:.6f}）"},)
         else:
             ref = row["close"] if t.get("forced") else row["open"]
             expect = ref * (1 - slip)
@@ -173,7 +195,7 @@ def audit_fill_time_lock(params: dict | None = None,
                 prev_sig = sigs[t["code"]].get(prev_day_map[t["code"]].get(t["date"], ""))
                 if prev_sig is None or abs(prev_sig) > 1e-12:
                     bad.append({**t, "why": "SELL 缺少前一交易日的空仓信号（时间锁违规）"})
-    return {"ok": not bad, "checked": len(port["trades"]), "violations": bad}
+    return {"ok": not bad, "checked": len(port["trades"]), "violations": bad, "anchor_exempt": len(exempt_anchor)}
 
 
 def stress_high_slippage(params: dict | None = None,
