@@ -41,3 +41,4 @@
 2026-10-20 01:06:21 [cloud_sync] eod+1 fills+0 → {'sb_shadow_eod': 1, 'sb_shadow_fills': 0}
 2026-10-21 13:08:29 [cloud_sync_fatal] 云端写入失败 sb_shadow_eod: HTTP 401 {"message":"Unregistered API key","hint":"Double check the provided API key as it is not registered for this project."}
 2026-10-21 19:06:16 [cloud_sync_fatal] 云端写入失败 sb_shadow_eod: HTTP 401 {"message":"Unregistered API key","hint":"Double check the provided API key as it is not registered for this project."}
+2026-10-21 19:30:48 [cloud_sync] eod+1 fills+0 → {'sb_shadow_eod': 1, 'sb_shadow_fills': 0}

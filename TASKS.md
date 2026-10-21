@@ -12,14 +12,29 @@
 
 ## 未完成任务（2026-10-21 核定）
 
-- [~] T-Fin31 云端灾备代跑设计（业主 2026-10-21 提问：手机冻结时可否云端代跑，
-  信号恢复再同步）。现状核查：origin=github.com:zhangxuegel/finance-agent.git，
-  本地 main **ahead 17 未推**；Termux 无对应 SSH 私钥（T-Fin12 后历次提交均在
-  本地）；.gitignore 密钥纪律齐备；.github/workflows 尚无。
-  设计稿已回业主（Actions 热备 runner + 单写水位防分叉），**待业主拍板三点**：
-  ①repo 公私与是否允许 Actions 拉私有库（免费 runner 限公共库）；②密钥走
-  Actions Secrets（SUPABASE/GLM 不落 code）；③单日幂等闸（engine --daily
-  按 trade_date 水位跳过已跑日，防手机/云端双写分叉）。拍板后开工。
+- [x] T-Fin31 云端灾备代跑（✅2026-10-21 完成：三点拍板落地 + 双源对帐修订令）
+  - 拍板执行：repo 公共（业主面板切换）/ 手机优先（闸 0 exit 9 语义）/ HTTPS token。
+  - 交付：`scripts/cloud_gate.py`（守门员模块）：
+    ① `--cloud-runner`：云端单写判定——今日 eod 已落库 → exit 9 跳过（手机优先）；
+    ② `--init-db`：runner 冷启动从云端分页整卷回灌 eod/fills（净值链不断；
+       实测 400 定位 eod 无 id 列改各自 order 参数）；
+    ③ `--recon [--fix] [--dry]`（业主"双跑对帐查残缺，补全同步两不误"修订令）：
+       本地影子账↔云端全量对账（不按水位），残缺双向补齐（eod REPLACE 幂等、
+       fills 按签名去重），同日双写冲突**停手不猜**交人工；eod 数值冲突按
+       --prefer 覆盖（缺省手机优先 local）；selftest 11 项全绿（离线桩测）；
+    ④ `--mobile`：手机第 0 步=对帐+补齐+冲突提示，闸结果不放倒日常链。
+  - `run_daily_all.sh`：第 0 步接 `--mobile` 对帐闸；末步接 `sync_all.sh`
+    （堵"跑完不推"缺口——T-Fin30 场景防复发）。
+  - `.github/workflows/daily_close.yml`：cron UTC 07:50（北京 15:50，手机先手半档）；
+    闸 0 单写判定 → 冷启动回灌 → shadow 补撮合/落库（--replay，真实 open）→
+    fetch/daily_report/ensemble → 闸 2 同步前对帐 → --push → 状态回推 repo
+    （checkout 自带 GITHUB_TOKEN 认证）；并发排队不互杀；workflow_dispatch 手动补跑。
+  - 验收：test_sim 全绿 ✔；cloud_gate selftest 11/11 ✔；真账对帐全空残缺
+    （eod/fills 双侧一致、零冲突）。
+  - **待业主**（上云三键）：①GitHub repo 设 Public；②Actions Secrets 配
+    SUPABASE_URL/KEY（现轮换版）+ 可选 GLM_API_KEY；③Termux 侧推送通道仍是
+    SSH 无私钥状态（本地 ahead 未推），按拍板"临时换 token"——生成 repo 级
+    PAT 交 Agent 执行 git push 后，云端 workflow 即可自持运行。
 
 
 - [x] T-Fin23 接入 GLM LLM 分析师（✅2026-10-21 完成）

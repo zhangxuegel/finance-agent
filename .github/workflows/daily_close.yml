@@ -1,0 +1,118 @@
+# .github/workflows/daily_close.yml —— T-Fin31 云端灾备收盘代跑
+#
+# 台账纪律（业主 2026-10-21 拍板：repo 公共 / 手机优先 / token 三点 + 双源对帐补充令）：
+#   · 手机优先：闸 0 判「今日 sb_shadow_eod 是否已由手机落库」→ 已落库则代跑跳过
+#     （闸语义 exit 9 = 手机先手）；15:50 UTC=北京 15:50，晚于手机 15:30 主跑位。
+#   · 代跑范围 = 收盘链：冷起点回灌历史账本 → 影子盘补撮合/落库（--replay，
+#     收盘后采用 CSV 内真实 open 价，与撮合铁律 next-open 同源）→ 核心引擎
+#     ensemble --daily → 同步前对帐闸 → 增量上云 → 状态回推 repo。
+#   · 单日单写者 + 双源对帐：闸 2 全量对帐，同日双写冲突 → 停手不推、任务级告警。
+#   · LLM 零下单权铁律不变：runner 无 GLM_API_KEY 时 factor 按既有降级矩阵
+#     静默降级（score clip）；webhook 未配置自动跳过推送。
+#
+# 所需 Actions Secrets（面板配置，绝不入库）：
+#   SUPABASE_URL / SUPABASE_KEY（当前轮换后的 sb_secret）
+#   GLM_API_KEY（可选；缺失走降级）
+#
+# 手动补跑： Actions → daily_close → Run workflow（note 可空）。
+name: daily_close
+
+on:
+  schedule:
+    - cron: "50 7 * * 1-5"      # UTC 07:50 = 北京 15:50（手机 15:30 先手）
+  workflow_dispatch:
+    inputs:
+      note:
+        description: "补跑说明（写入提交信息，可空）"
+        required: false
+        default: ""
+
+permissions:
+  contents: write               # 状态回推 repo（等同位数 PAT 的本库 scope）
+
+concurrency:
+  group: daily_close
+  cancel-in-progress: false     # 连日补跑排队，不互杀
+
+jobs:
+  close:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      - name: 依赖（最小闭包）
+        run: pip install pyyaml requests
+
+      - name: 注入密钥（进程级环境，不落盘）
+        run: |
+          printf 'SUPABASE_URL=%s\nSUPABASE_KEY=%s\nGLM_API_KEY=%s\n' \
+            "$SUPA_URL" "$SUPA_KEY" "$GLM_KEY" >> "$GITHUB_ENV"
+        env:
+          SUPA_URL: ${{ secrets.SUPABASE_URL }}
+          SUPA_KEY: ${{ secrets.SUPABASE_KEY }}
+          GLM_KEY: ${{ secrets.GLM_API_KEY }}
+
+      - name: 闸 0 —— 手机优先单写判定（exit 9=手机已跑，收工成功）
+        id: gate
+        run: |
+          set +e
+          python3 scripts/cloud_gate.py --cloud-runner
+          code=$?
+          set -e
+          if [ "$code" = "9" ]; then
+            echo "mobile_first=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ "$code" != "0" ]; then exit "$code"; fi
+
+      - name: 闸 1 —— runner 冷启动：云端整卷回灌临时账本
+        if: steps.gate.outputs.mobile_first != 'true'
+        run: python3 scripts/cloud_gate.py --init-db
+
+      - name: 步骤 2 —— 影子盘收盘补撮合 + 落库（手机缺席才有此步）
+        if: steps.gate.outputs.mobile_first != 'true'
+        run: |
+          set +e
+          python3 scripts/shadow_broker.py --match   --replay   # 真实 open 重放撮合
+          python3 scripts/shadow_broker.py --ledger  --replay   # eod REPLACE 落库
+          python3 scripts/shadow_broker.py --review  --replay || true  # 推送可降级
+          set -e
+
+      - name: 步骤 3 —— 行情补抓 + 核心引擎增量
+        if: steps.gate.outputs.mobile_first != 'true'
+        run: |
+          python3 scripts/fetch_data.py
+          python3 scripts/daily_report.py
+          python3 scripts/ensemble_engine.py --daily --replay 20
+
+      - name: 闸 2 —— 同步前双源对帐（残缺补全；同日双写冲突即停手）
+        if: steps.gate.outputs.mobile_first != 'true'
+        run: |
+          python3 scripts/cloud_gate.py --mobile --dry
+          python3 scripts/cloud_gate.py --mobile
+
+      - name: 步骤 4 —— 增量上云
+        if: steps.gate.outputs.mobile_first != 'true'
+        run: |
+          set +e
+          python3 scripts/sync_to_cloud.py --push
+          echo "[runner] sync rc=$?"
+          set -e
+
+      - name: 步骤 5 —— 状态回推 repo（云端跑位事实记录）
+        if: steps.gate.outputs.mobile_first != 'true'
+        run: |
+          git config user.name  "cloud-runner[bot]"
+          git config user.email "cloud-runner@users.noreply.github.com"
+          git add -A data index reports logs 2>/dev/null || true
+          if git diff --cached --quiet; then
+            echo "[runner] 状态无变化，免提交"
+          else
+            git commit -q -m "cloud-runner: 收盘代跑落库（${{ inputs.note }}）" \
+              -m "T-Fin31 灾备代跑：手机缺席，单写水位闸放行；详见 reports/cron 对应日"
+            git push
+          fi
