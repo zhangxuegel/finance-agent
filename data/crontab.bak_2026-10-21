@@ -1,0 +1,4 @@
+GLM_API_KEY=529930b9682544f39f07ec27e94b6779.UMivNdXqpuZAibGR
+# finance-agent cron (台账 cron.schedule = 30 15 * * 1-5)
+
+30 15 * * 1-5 cd ~/finance-agent && sh scripts/run_daily_all.sh >> data/cron.log 2>&1

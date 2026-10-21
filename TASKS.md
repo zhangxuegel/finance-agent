@@ -51,6 +51,35 @@
     接入 RSI14 + ATR% 辅助过滤（rule_score 修订 + 极端情景矩阵回归）；④
     红灯状态机：A/B/D 强制降至 0，E 保留（validate V3 适配）；⑤全量历史回测
     （含黑天鹅重放）+ 策略赛马对比报告。
+- [~] T-Fin30 云端同步失效应急（2026-10-21 诊断完毕，【阻塞·待业主】= Supabase 新密钥）
+  - ① 手动全量收盘流程已跑：run_daily_all.sh 全链绿（fetch/daily_report/ensemble
+    --daily/push），eod REPLACE 幂等核验 10-21 行=1；NAV ¥958,266（红灯日 0 交易）。
+  - ② **云端根因＝Supabase 密钥失效**（非 cron、非本地缺口）：
+    `logs/cloud_sync_2026-10-21.log HTTP 401 "Unregistered API key"`；
+    时间线：10-20 01:06 同步成功（水位=eod 10-20）→ 10-20 11:38~14:55 本地
+    `.finance_agent_cloud` 与 `.streamlit/secrets.toml` 均带同一 `sb_secret_vxoL…`
+    → 13:08 起全部 401 ⇒ **Supabase 服务端把该 secret key 轮换/撤销**（或项目
+    暂停恢复时密钥重置）。双头传输（apikey+Bearer 同发）已排除传输方式问题。
+    本地无 ~/.supabase_token/SUPABASE_ACCESS_TOKEN，无法经 Management API 自愈。
+    **待业主**：Supabase Dashboard → Project Settings → API Keys → 生成新
+    secret key → 写入 `~/.finance_agent_cloud` 的 SUPABASE_KEY 行（另同步更新
+    .streamlit/secrets.toml）；然后 `bash sync_all.sh`（水位断点续传，幂等）。
+  - ③ cron 判定：crond 存活且**经过控探针实证会执行 spool 任务**（首探误报系
+    cron 会把命令在首个 `%` 截断的既知特性）；但整个 `var/spool/cron` 目录
+    mtime=2026-10-21 16:03 —— crontab 是**今天 16:20 才装载**，15:30 时段本就
+    未到达，近几天未同步与此无关。已还原原 crontab（探针已撤）、crond -b 拉起。
+    **手机侧防冻结指引**（Termux 请勿被电池优化杀后台）：
+    a) 系统设置 → 应用管理 → Termux → 电池 → 改"无限制"/关闭电池优化；
+    b) 多任务卡片上锁 Termux；
+    c) 系统设置 → 电池 → 关闭"自适应电池"对 Termux 的深睡（厂商 ROM：自启动
+    白名单/关联启动勾选 Termux）；
+    d) Termux 新会话执行 `termux-wake-lock`（可加进 run_daily_all.sh 用户侧入口，
+    或放 crontab 每天 15:20 `termux-wake-lock`）；
+    e) 勿用一键清理/后台管理器划掉 Termux；Android 版本若支持，开启
+    " Phantom process killer 关闭 "（`adb shell settings put global
+    settings_enable_monitor_phantom_procs false` 或开发者选项关闭"后台进程限制"）。
+  - 验收：本地 eod=10-21 齐（面板数字以本地为准），云端等新密钥放行；cron 明天
+    15:30 首个交易日时段自动首跑并落 data/cron.log 留痕。
 - [ ] T-Fin29 急跌门放宽评估（原 T-Fin28 定义顺延，冻结中，需 CRO 书面确认才开工）
 
 - [x] T-Fin27 回归红线失效：撮合时间锁账本审计失败（✅2026-10-21 完成）
