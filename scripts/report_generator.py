@@ -163,7 +163,7 @@ def weekly(asof: str | None = None) -> str:
             f"| {r['week_end']} | {r['sharpe_a']} | {r['sharpe_b']} "
             f"| {r['weight_a'] * 100:.0f}%/{r['weight_b'] * 100:.0f}% "
             f"| {r['c_buffer'] * 100:.0f}% | {(r['factor'] or {}).get('score')} "
-            f"| {r['tilt_note']} |")
+            f"| {r.get('tilt_note') or (r.get('factor') or {}).get('source') or '-'} |")
     alarms = [a for a in st["alarms"] if week_start_race <= (a.get("date", "")) <= asof]
     mdd_now = m_all["mdd"]
     dist_mdd = max(0.0, params["risk"]["max_drawdown_cutoff"] * 100 - mdd_now * 100)

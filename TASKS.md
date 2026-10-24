@@ -12,6 +12,35 @@
 
 ## 未完成任务（2026-10-21 核定）
 
+- [x] T-Fin32 补跑 10-22/10-23 两日缺口 + cloud_gate 对账闸缺陷修复（✅2026-10-24 完成）
+  - 现象：手机端 10-22/10-23 未跑日常链，fetch/daily_report/shadow ledger/推云全缺；
+    云端 workflow 同样未代跑（双方 eod 水位同停 2026-10-21）。
+  - 缺陷 1：`24c5e45(fix: skip reconcile on github actions)` 把 `recon()` 改成空壳桩，
+    本地路径也 return None → `--mobile` 闸 `rep[k]` TypeError 全场崩（当日实弹回归）。
+    ✅修复：recon() 非 GA 环境派发 `recon_original`；main --mobile 增 rep=None 守卫；
+    selftest 11/11 全绿；真账 `--mobile` 对账=双向补齐 eod +2 行、零冲突。
+  - 缺口 2 ✅：`daily_report --replay 3` 不能作账本校验器（见结构发现），账本从 git
+    HEAD 归位后按增量口径 engine_run(report_from=10-22) 推进两日（零订单、净值
+    ¥1,519,987.97 不变），10-22/10-23 两份日报按真账重生成。
+  - 缺口 3 ✅：新增维护工具 `scripts/repair_shadow_backfill.py`（安全闸 A/B/C/D：
+    缺日有成交即停手/有持仓即停手/灯色确定性重算/缺 K 线显式 eod_gap），
+    影子链补 10-22(¥976,321.8)/10-23(¥976,302.4) 两行 EOD（真实日线收口，零成交）。
+  - 缺陷 2 ✅：`report_generator --weekly` KeyError tilt_note（race_log rule 兜底行
+    无该键）→ 自愈取 f"factor.source" 兜底，W43 周报生成成功。
+  - 端到端：云端回读 sb_shadow_eod 尾 4 行 = 10-23/10-22/10-21/10-20，两侧一致；
+    risk_control --audit（186 笔合规 PASS）+ validate_sim 全绿 + test_sim 全绿；
+    fetch 覆盖 2023-10-25~2026-10-23（726 行）。
+- [ ] T-Fin33（登记待拍板）：重放引擎与台账锚点口径的结构性分歧
+  - 现象：`daily_report.py --replay N` 的全新账户起步用 `i0=warmup`（warmup 窗口后
+    第一信号日建仓），而台账真账首日是 params.anchor.date=2023-11-17 的等权锚定
+    建仓（engine 全链无实现、仅 audit 豁免引用）。当日实测：重放 186 笔中 185 笔
+    与真账不同，10-23 净值差 ¥21,311（1,541,299 vs 1,519,988）。
+  - 影响：①--replay 全量重放的数字与真账不可比，误用会导致"两个账本"；
+    ②任何下游若把重放当校验基准都会误报（当日已排险：真账自 HEAD 归位）。
+  - 候选处置（业主拍板其一）：a) engine 实现锚点建仓→重放=真账可当校验器；
+    b) 只读侧维持现状，重放标记"演示口径"并在文档/register 登记不可互查。
+    风控红线不动：熔断、LLM 无下单权均不受影响。
+
 - [x] T-Fin31 云端灾备代跑（✅2026-10-21 完成：三点拍板落地 + 双源对帐修订令）
   - 拍板执行：repo 公共（业主面板切换）/ 手机优先（闸 0 exit 9 语义）/ HTTPS token。
   - 交付：`scripts/cloud_gate.py`（守门员模块）：

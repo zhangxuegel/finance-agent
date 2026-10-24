@@ -345,10 +345,14 @@ def push_rows(cfg: dict, table: str, rows: list[dict],
 
 
 def recon(*args, **kwargs):
+    """T-Fin31 缺陷修复（T-Fin32）：24c5e45 欲在云端环境跳过对账，但把
+    本地路径一并改成 return None → --mobile 闸 TypeError 崩、对账闸形同虚设。
+    修正：仅 GITHUB_ACTIONS 环境跳过；本地一律派发 recon_original。"""
     import os
     if os.environ.get("GITHUB_ACTIONS") == "true":
         print("云端环境，跳过对账")
-        return
+        return None
+    return recon_original(*args, **kwargs)
 
 def recon_original(cfg: dict, fix: bool = False, prefer: str = "local") -> dict:
     """全量对账 +（--fix 时）双向补齐。口径：残缺=一侧无该行；
@@ -420,6 +424,9 @@ def main() -> None:
         # T-Fin31 修订：手机端闸 = 全量双向对帐 + 补齐（残缺即补、冲突停手；手机优先）；
         # 加 --dry 则只读对帐不动账
         rep = recon(load_cfg(), "--dry" not in sys.argv, "local")
+        if rep is None:
+            print("[mobile] 对账闸被跳过（云端环境），放行本地主链")
+            sys.exit(0)
         clean = all(not rep[k] for k in
                     ("eod_only_local", "eod_only_cloud", "eod_mismatch",
                      "fills_only_local", "fills_only_cloud",
