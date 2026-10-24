@@ -501,9 +501,38 @@ def resolve_eod(day: str, prefer: str) -> int:
     # 裁决终检：复对 + 指纹
     rep = recon_original(cfg, fix=False, prefer=prefer)
     lf, cf = table_fingerprint("eod", cfg)
-    code, msg = classify_report(rep, lf, cf)
+    code, msg = classify_report(rep, (lf, cf))
     print(f"[resolve] 裁决后复检：exit {code}（{msg}）")
     return code
+
+
+def _alert(text: str, severity: str = "ERROR") -> None:
+    """闸阻断/超时的严重告警推送（T-Fin35 补充拍板 #1/#2）。
+    顺着 push_notification 的 webhook 双保险惯例（未配置→静默跳过）；
+    告警通道故障绝不影响闸本身的判定与退出码。"""
+    try:
+        from push_notification import push_to_params
+        ok, note = push_to_params(f"【{severity} | 对账闸 · 本地】{text}")
+        print(f"[alert] {severity} 告警{'已发 ✅' if ok else '未外发'}：{note}")
+    except Exception as e:  # noqa: BLE001
+        print(f"[alert] ⚠ 告警通道异常（不影响闸判定）：{e}")
+
+
+ERROR_BANNER = ("="*58)
+
+
+def _error_conflict(detail: str) -> None:
+    """§规则2 补充拍板：同键异值/双写冲突的 ERROR 级日志——必须讲清
+    (a) 记账已被阻断 (b) 无人值守的下轮会持续卡死 (c) 人工恢复命令。"""
+    print(f"[ERROR] {ERROR_BANNER}")
+    print("[ERROR] ⛔ 不可调和冲突（同键异值/同日双写）→ 记账已被阻断")
+    print("[ERROR] ⚠ 此状态无法自动恢复：无人值守时后续每轮都会在这里卡死")
+    print("[ERROR] 人工恢复唯一路径（裁决后放行）：")
+    print("[ERROR]   python3 scripts/cloud_gate.py --resolve-eod YYYY-MM-DD \\")
+    print("[ERROR]        --prefer local   # 以本地为准覆写云端（反之 --prefer cloud）")
+    print("[ERROR] 冲突明细 ↓")
+    print(detail)
+    print(f"[ERROR] {ERROR_BANNER}")
 
 
 def classify_report(rep: dict, fp_pair: tuple | None = None) -> tuple[int, str]:
@@ -528,8 +557,11 @@ def gate_run(wait_minutes: float = 15.0, dry: bool = False) -> int:
     exit 0=统一(允许记账)；2=冲突阻断；3=超时/凭证缺失（本侧停跑，他侧不受影响）。"""
     cfg = load_cfg()
     if not (cfg.get("SUPABASE_URL") and cfg.get("SUPABASE_KEY")):
-        print("[gate] ⚠ 本侧对账前提缺失（云端凭证不可用）→ 本侧停跑；"
-              "另一侧（云端/手机）不受影响，可继续跑")
+        note = "本侧对账前提缺失（云端凭证不可用）→ 本侧停跑；另一侧（云端/手机）不受影响"
+        print(f"[ERROR] {ERROR_BANNER}")
+        print(f"[ERROR] ⛔ {note}")
+        print(f"[ERROR] {ERROR_BANNER}")
+        _alert(note, severity="ERROR")
         return 3
     deadline = time.time() + wait_minutes * 60
     attempt = 0
@@ -552,9 +584,12 @@ def gate_run(wait_minutes: float = 15.0, dry: bool = False) -> int:
             code, msg = classify_report(rep, fp_e)
             if code != 0:
                 code, msg = classify_report(rep, fp_f)
-            if code == 2:                        # 冲突：dump 全量明细后阻断
-                print(f"[gate] ⚠ {msg}")
-                print(json.dumps(rep, ensure_ascii=False, indent=1, default=str))
+            if code == 2:                        # 冲突：ERROR 日志+告警+阻断
+                _error_conflict(json.dumps(rep, ensure_ascii=False,
+                                           indent=1, default=str))
+                _alert("对账闸阻断：同键异值/同日双写冲突无人值守无法自动恢复，"
+                       "须人工 --resolve-eod 裁决；明细见手机报错尾部",
+                       severity="ERROR")
                 return 2
             if code == 0:
                 mode = "--dry 只读" if dry else "幂等补齐后"
@@ -562,8 +597,14 @@ def gate_run(wait_minutes: float = 15.0, dry: bool = False) -> int:
                       f"fills 指纹 {fp_f[0]}＝{fp_f[1]} → 允许记账")
                 return 0
         if time.time() >= deadline:
-            print(f"[gate] 对账未完成超时（等待 {wait_minutes:g} 分钟，"
-                  "第" + str(attempt) + "轮）→ 本侧停跑；另一侧不受影响，可继续跑")
+            note = (f"对账未完成超时（等待 {wait_minutes:g} 分钟，第{attempt}轮）"
+                    "→ 本侧停跑（他侧不受影响）；下轮 cron 将重试")
+            print(f"[ERROR] {ERROR_BANNER}")
+            print(f"[ERROR] ⛔ {note}")
+            print("[ERROR] 若持续再现，先查云端 workflow 日志与手机网络；"
+                  "恢复方式：直接重跑 run_daily_all.sh")
+            print(f"[ERROR] {ERROR_BANNER}")
+            _alert(note, severity="ERROR")
             return 3
         print(f"[gate] 待 60s 后重试（截止还剩 "
               f"{max(0, deadline - time.time()):.0f}s）")
@@ -623,7 +664,9 @@ def main() -> None:
         # exit 0=统一(允许记账) / 2=冲突阻断 / 3=对账未完成(残缺未收敛/不可达)。
         cfg = load_cfg()
         if not (cfg.get("SUPABASE_URL") and cfg.get("SUPABASE_KEY")):
-            print("[mobile] ⚠ 云端凭证缺失 → 本侧停跑；另一侧不受影响")
+            print("[error] 云端凭证缺失 → 本侧停跑（--mobile）；另一侧不受影响")
+            _alert("对账闸凭证缺失（--mobile）→ 本侧停跑；他侧不受影响",
+                   severity="ERROR")
             sys.exit(3)
         rep = recon(cfg, "--dry" not in sys.argv, "local")
         if rep is None:
@@ -634,16 +677,22 @@ def main() -> None:
             fp_e = table_fingerprint("eod", cfg)
             fp_f = table_fingerprint("fills", cfg)
         except Exception as e:  # noqa: BLE001
-            print(f"[mobile] ⚠ 云端不可达 → 本侧停跑；另一侧不受影响：{e}")
+            print(f"[error] 云端不可达 → 本侧停跑；另一侧不受影响：{e}")
+            _alert(f"对账闸连不上云端（--mobile）→ 本侧停跑；他侧不受影响：{e}",
+                   severity="ERROR")
             sys.exit(3)
         code, msg = classify_report(rep, fp_e)
         if code != 0:
             code, msg = classify_report(rep, fp_f)
         print("[mobile] 双源对帐（严格分类）：", msg)
-        if rep.get("fills_conflict_dates") or rep.get("eod_mismatch"):
-            print("[mobile] ⚠ 冲突明细 ↓（--resolve-eod 显式裁决后放行）")
-            print(json.dumps(rep, ensure_ascii=False, indent=1, default=str))
+        if code == 2:
+            _error_conflict(json.dumps(rep, ensure_ascii=False, indent=1,
+                                       default=str))
+            _alert("对账闸阻断：同键异值/同日双写冲突仍需人工 --resolve-eod "
+                   "裁决；明细见手机报错尾部", severity="ERROR")
         elif code == 3:
+            note = "对账未完成（残缺未收敛/不可达）→ 本侧停跑；他侧不受影响"
+            _alert(note, severity="ERROR")
             print(json.dumps(rep, ensure_ascii=False, default=str))
         elif code == 0:
             print(f"[mobile] eod 指纹 {fp_e[0]}＝{fp_e[1]}，"

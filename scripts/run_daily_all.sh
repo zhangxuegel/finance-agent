@@ -28,8 +28,10 @@ if [ $? -ne 0 ]; then
   exit 1
 fi
 
-# 1) 强制对账闸（每次启动必跑；exit 0/2/3 语义见 cloud_gate.py --gate）
-python3 scripts/cloud_gate.py --gate --wait-minutes "${GATE_WAIT:-15}"
+# 1) 强制对账闸（每次启动必跑；exit 0/2/3 语义见 cloud_gate.py --gate；
+#    默认 60 分钟——T-Fin35 补充拍板：周一云端跑得慢也不误杀；超时会自动带
+#    ERROR 告警推送然后本侧退出）
+python3 scripts/cloud_gate.py --gate --wait-minutes "${GATE_WAIT:-60}"
 gate_rc=$?
 case "$gate_rc" in
   0) echo "$LOG_TAG 对账统一 → 允许记账" ;;
@@ -45,7 +47,7 @@ esac
 
 # 2) 记账/推进（仅对账统一后可达）
 python3 scripts/fetch_data.py || exit 1
-read -r PORT_LAST SHADOW_MAX <<EOF
+read -r PORT_LAST SHADOW_MAX LATEST <<EOF
 $(python3 - <<'PY'
 import csv, json, os, sqlite3
 with open("data/510300.csv", newline="", encoding="utf-8") as f:
@@ -61,17 +63,17 @@ print(port.get("last_date") or "", shadow, latest)
 PY
 )
 EOF
-echo "$LOG_TAG 台账水位：portfolio=$PORT_LAST / 影子eod=$SHADOW_MAX"
-TF=$(date +%u)   # 1=Mon ... 6=Sat, 7=Sun
+echo "$LOG_TAG 台账水位：portfolio=$PORT_LAST / 影子eod=$SHADOW_MAX / 行情最新=$LATEST"
+TF=${FIN_FAKE_TF:-$(date +%u)}   # 1=Mon ... 6=Sat, 7=Sun（FIN_FAKE_TF 仅沙盒演练用）
 
 if [ "$TF" -le 5 ]; then
-  if [ "$SHADOW_MAX" != "$(python3 -c "import csv;print(list(csv.DictReader(open('data/510300.csv')))[-1]['date'])")" ]; then
+  if [ "$SHADOW_MAX" \< "$LATEST" ]; then
     echo "$LOG_TAG 影子账未推进 → 收盘补撮合/落库（--replay，真实 open 口径）"
     python3 scripts/shadow_broker.py --match  --replay || echo "$LOG_TAG [warn] 影子撮合异常"
     python3 scripts/shadow_broker.py --ledger --replay || echo "$LOG_TAG [warn] 影子落库异常"
     python3 scripts/shadow_broker.py --review --replay || echo "$LOG_TAG [warn] 推送可降级"
   fi
-  if [ "$PORT_LAST" != "$SHADOW_MAX" ] || [ "$PORT_LAST" = "" ]; then
+  if [ "$PORT_LAST" \< "$LATEST" ] || [ -z "$PORT_LAST" ]; then
     echo "$LOG_TAG 核心账本未推进 → daily_report + ensemble"
     python3 scripts/daily_report.py    || exit 2
     python3 scripts/ensemble_engine.py --daily --replay 20 || exit 3
@@ -82,12 +84,14 @@ if [ "$TF" -le 5 ]; then
   # 3) 记账后再对帐（同一标准）→ 上云
   python3 scripts/cloud_gate.py --gate --wait-minutes 3 || echo "$LOG_TAG [warn] 记账后对帐未统一（行内人工介入）"
   bash sync_all.sh || echo "$LOG_TAG [warn] 上云异常（本地已留痕）"
-  # 4) 状态回推 repo（本地发生过写入才提交）
-  git add -A data index reports logs 2>/dev/null || true
-  if ! git diff --cached --quiet; then
-    git commit -q -m "local-runner: 本地记账/对帐留痕（T-Fin35 流水线）" \
-      -m "preflight→gate→记账→gate→sync 链路痕迹；详见当日报告"
-    git push 2>/dev/null || echo "$LOG_TAG [warn] 状态回推 push 失败（本地已留痕）"
+  # 4) 状态回推 repo（本地发生过写入才提交；沙盒无 .git 时静默跳过）
+  if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    git add -A data index reports logs 2>/dev/null || true
+    if ! git diff --cached --quiet; then
+      git commit -q -m "local-runner: 本地记账/对帐留痕（T-Fin35 流水线）" \
+        -m "preflight→gate→记账→gate→sync 链路痕迹；详见当日报告"
+      git push 2>/dev/null || echo "$LOG_TAG [warn] 状态回推 push 失败（本地已留痕）"
+    fi
   fi
   # 周五：风控综合审计 + 周末深度复盘（分析件）
   if [ "$TF" = "5" ]; then
