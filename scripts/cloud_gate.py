@@ -1,25 +1,36 @@
 # -*- coding: utf-8 -*-
-"""cloud_gate.py —— T-Fin31 云端灾备代跑的单写水位闸
+"""cloud_gate.py —— 云端↔本地 影子账对账闸（T-Fin35 业务规则重构版）
 
-台账纪律（业主 2026-10-21 三点拍板：repo 公共 / 手机优先 / HTTPS token 跑通同步）：
-  · **单日单写者**：判定键 = sb_shadow_eod 是否已有「今日」行。
-      - 手机链 15:05 --ledger 先落今日 eod → 云端 runner 当天看到即跳过（手机优先）；
-      - 手机缺席（冻结）→ 云端 runner 走代跑链并落 eod、提交回 repo；
-      - 手机恢复 → --mobile 把云端多出的 eod/fills 回灌本地 shadow_live.db
-        （eod REPLACE 幂等；fills 仅当本地该日无成交时整日回灌，
-        若同日双方都有 fills 即双写 bug——不猜、停手列冲突交人工对账）。
-  · LLM 零下单权不变；本模块只做确定性读数与幂等写入。
-  · 密钥读 ~/.finance_agent_cloud / .env（与 sync_to_cloud 同源），绝不入库。
+台账纪律（业主 2026-10-24 对账规则拍板，替代 10-21 三点的"手机优先"覆盖口径）：
+  1) **阻断条件**：仅当「信息不全」（缺失必需数据/基础状态）才停跑——
+     数据完整性检查由 preflight.py 负责，与对账彻底分离；
+  2) **恢复与前置**：信息满足后允许继续跑，但每次流水线启动的第一件事
+     必须是强制对账——无论上一轮是否对过；
+  3) **执行隔离**：对账状态统一（残缺清零 + 双侧指纹相等）之前，
+     绝不允许执行记账逻辑（daily_report 等）；
+  4) **统一规则**：云端与本地用同一份 cloud_gate 代码与同一标准
+     （残缺=一侧无该行；冲突=同键异值；统一校验=fingerprint 指纹）。
+  5) **谁缺谁停**：断网/凭证缺失的一侧停止记账，另一侧不受影响照常跑。
+  6) **防脏数据**：不可调和冲突（fills 同日双写异笔 / eod 同键数值打架）
+     抛异常阻断记账，明细落盘；人工经 --resolve-eod 显式裁决后放行。
 
 用法：
+  python3 scripts/cloud_gate.py --gate [--wait-minutes 15] [--dry]
+      # 强制对账闸（本地流水线第 1 步；有界等待重试，绝不轻言退出）
+      # exit 0=对账统一（允许记账）; 2=冲突阻断; 3=对账未完成超时/凭证缺失
+  python3 scripts/cloud_gate.py --resolve-eod 2026-10-22 --prefer local|cloud
+      # eod 数值冲突的人工裁决工具：被裁决覆盖的一侧以裁决侧为准
   python3 scripts/cloud_gate.py --cloud-runner   # Actions 收盘流程第 0 步（跳过=exit 9）
-  python3 scripts/cloud_gate.py --mobile        # 手机 run_daily_all 第 0 步
+  python3 scripts/cloud_gate.py --mobile [--dry] # 快速对帐（单轮，严格分类）
+  python3 scripts/cloud_gate.py --init-db        # Actions 冷启动整卷回灌
   python3 scripts/cloud_gate.py --selftest      # 离线自测（fixture，不联网）
 """
+import hashlib
 import json
 import os
 import sqlite3
 import sys
+import time
 import urllib.request
 from datetime import date
 
@@ -220,8 +231,8 @@ def selftest_recon() -> list[tuple[str, bool]]:
                              if t == "sb_shadow_fills" for d in ds})
         return [("双源对帐：仅云端 eod 1023 回灌进本地", "2026-10-23" in got_dates),
                 ("双源对帐：仅本地 eod 1022 已上云", "2026-10-22" in pushed_eod),
-                ("冲突 eod 按手机优先覆盖（1024 推 local 版）",
-                 "2026-10-24" in pushed_eod),
+                ("冲突 eod 1024 → 阻断不上推（本地保自家值，不再静默覆盖）",
+                 "2026-10-24" not in pushed_eod),
                 ("fills 冲突日 1025：本地保自家笔(300·BUY)不并云笔(500·SELL)，"
                  "且不上推", conf_local == [{"shares": 300, "side": "BUY"}]
                  and "2026-10-25" not in pushed_fil),
@@ -252,6 +263,15 @@ def selftest() -> int:
         nav = conn.execute("SELECT nav FROM eod"
                            " WHERE trade_date='2026-10-21'").fetchone()[0]
     os.unlink(tmp)
+    rows_a = [{"trade_date": "2026-10-21", "nav": 976312.1, "nav_prev": 976273.3,
+               "day_ret": 0.00004, "bench_index_close": 3901.2},
+              {"trade_date": "2026-10-20", "nav": 976273.3, "nav_prev": 976200.0,
+               "day_ret": -0.00001, "bench_index_close": 3899.9}]
+    rows_b = list(reversed(rows_a))
+    fp_ok = (fingerprint(rows_a, FPRINT_COLS["eod"])
+             == fingerprint(rows_b, FPRINT_COLS["eod"]))
+    fp_num = (fingerprint([{"trade_date": "d", "shares": 300}], ("shares",)) ==
+              fingerprint([{"trade_date": "d", "shares": 300.0}], ("shares",)))
     checks = [
         ("gate upsert 首推 1 行", n1 == 1),
         ("REPLACE 复写仍 1 行（幂等）", n2 == 1 and dup == 1),
@@ -260,6 +280,8 @@ def selftest() -> int:
          in (load_cfg().get("SUPABASE_URL"), None)),
         ("云端只读无凭证静默回空", cloud_rows({}, "2026-01-01",
                                         "sb_shadow_eod") == []),
+        ("统一指纹：行序无关", fp_ok),
+        ("统一指纹：int/float 规范一致", fp_num),
     ] + selftest_recon()
     ok = all(c for _, c in checks)
     for name, c in checks:
@@ -269,9 +291,73 @@ def selftest() -> int:
     return 0 if ok else 1
 
 
-# ---------------- 双向对账：查残缺 + 补全同步（T-Fin31 修订版）----------------
+# ---------------- 双向对账：查残缺 + 补全同步（T-Fin35 统一标准版）----------------
 EOD_EQ_COLS = ("nav", "nav_prev", "day_ret", "bench_index_close")
 EPS = 1e-4                      # 浮点尾差容忍（台账分位）
+
+# 统一校验指纹的投影列（规则4：双侧同一标准；只比共同键值，列序无关）
+FPRINT_COLS = {
+    "eod": ("trade_date",) + EOD_EQ_COLS,
+    "fills": ("trade_date", "id", "leg", "code", "side",
+              "shares", "price", "fee", "reason"),
+}
+
+
+def _canon_v(v):
+    """指纹/比较的数值规范化：int/float 统一发到 6 位小数（台账分位以下噪声不计）。"""
+    if isinstance(v, bool):
+        return v
+    if isinstance(v, (int, float)):
+        return round(float(v) + 0.0, 6)
+    return str(v)
+
+
+def fingerprint(rows: list, cols: tuple) -> str:
+    """统一校验指纹 = sha256(canonical_json(投影行))；列序/行序无关。
+    云端与本地各跑同一份代码同一投影——指纹相等 ⇔ 内容一致（规则4）。"""
+    proj = []
+    for r in rows:
+        if r.get("trade_date") is None:
+            continue
+        proj.append({c: _canon_v(r.get(c)) for c in cols})
+    proj.sort(key=lambda d: tuple(json.dumps(v, sort_keys=True, ensure_ascii=False)
+                                  for v in d.values()))
+    blob = json.dumps(proj, ensure_ascii=False, sort_keys=True,
+                      separators=(",", ":"))
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:16]
+
+
+def table_fingerprint(table: str, cfg: dict) -> tuple[str, str]:
+    """返回 (local_fp, cloud_fp)；投影列见 FPRINT_COLS。"""
+    cols = FPRINT_COLS["eod" if table == "eod" else "fills"]
+    ctable = f"sb_shadow_{table}"
+    lf = fingerprint(local_rows(table), cols)
+    cf = fingerprint(cloud_all_paged(cfg, ctable, order=(
+        "trade_date.asc.id.asc" if table == "fills" else "trade_date.asc")), cols)
+    return lf, cf
+
+
+def cloud_alive(cfg: dict) -> None:
+    """云端可达性探针：不可达抛异常（与「静默回空」区分，防误判为对账一致）。"""
+    if not cloud_rows(cfg, "1990-01-01", "sb_shadow_eod"):
+        raise ConnectionError("云端只读探针失败（网络/凭证）")
+
+
+REPO = "zhangxuegel/finance-agent"      # 公共仓库 Actions 状态探测（无凭证）
+
+
+def cloud_busy() -> bool:
+    """云端 workflow 正在跑 → 视为对账未完成（等其收口，不与其抢写）。"""
+    try:
+        req = urllib.request.Request(
+            f"https://api.github.com/repos/{REPO}/actions/workflows/"
+            "daily_close.yml/runs?per_page=1")
+        with urllib.request.urlopen(req, timeout=15) as r:
+            run = json.loads(r.read() or "{}").get("workflow_runs", [{}])[0]
+        return (run.get("status") in ("in_progress", "queued", "waiting",
+                                      "pending"))
+    except Exception:  # noqa: BLE001 —— 探测失败不阻断对账（靠对账本身收敛判定）
+        return False
 
 
 def local_rows(table: str) -> list[dict]:
@@ -355,9 +441,10 @@ def recon(*args, **kwargs):
     return recon_original(*args, **kwargs)
 
 def recon_original(cfg: dict, fix: bool = False, prefer: str = "local") -> dict:
-    """全量对账 +（--fix 时）双向补齐。口径：残缺=一侧无该行；
-    eod 双侧数值不一致=按 --prefer 覆盖（缺省手机优先 local）；
-    fills 同日双侧异笔=冲突，不猜、停手列明细交人工。"""
+    """全量对账 +（--fix 时）双向补齐。口径（T-Fin35 统一标准）：
+    残缺 = 一侧无该行 → 双向幂等补齐（eod REPLACE / fills 按签名去重）；
+    冲突 = eod 同键数值不一致 或 fills 同日双写异笔 → 一律不猜、列明细停手，
+    交人工 --resolve-eod 裁决（规则4/6；prefer 仅供裁决工具使用）。"""
     rc = Recon(cfg)
     fg, conflict = rc.fills_gaps()
     report = rc.eod_gaps() | fg
@@ -365,7 +452,7 @@ def recon_original(cfg: dict, fix: bool = False, prefer: str = "local") -> dict:
     if not fix:
         report["fixed"] = False
         return report
-    # 1) eod 残缺：双向补齐
+    # 1) eod 残缺：双向补齐（REPLACE 幂等）
     miss_local = [rc.cdate[d] for d in report["eod_only_cloud"]]
     miss_cloud = [rc.ldate[d] for d in report["eod_only_local"]]
     if miss_local:
@@ -374,18 +461,9 @@ def recon_original(cfg: dict, fix: bool = False, prefer: str = "local") -> dict:
     if miss_cloud:
         report["fixed_eod_pushed"] = push_rows(rc.cfg, "sb_shadow_eod",
                                                miss_cloud, "trade_date")
-    # 2) eod 数值冲突：按 prefer 侧覆盖（台账主权归声明侧）
-    for m in report["eod_mismatch"]:
-        src = rc.ldate if prefer == "local" else rc.cdate
-        row = dict(src[m["date"]])
-        if prefer == "local":
-            push_rows(rc.cfg, "sb_shadow_eod", [row], "trade_date")
-        else:
-            with sqlite3.connect(DB) as conn:
-                upsert_sqlite(conn, "eod", [row])
+    # 2) eod 数值冲突：不再按 prefer 静默覆盖（T-Fin35 阻断口径），留待人工裁决
     if report["eod_mismatch"]:
-        report["fixed_eod_prefred"] = {m["date"]: prefer
-                                       for m in report["eod_mismatch"]}
+        report["eod_mismatch_blocked"] = [m["date"] for m in report["eod_mismatch"]]
     # 3) fills 双向补齐（冲突日禁区：一律不猜）
     lfix = [r for r in rc.lfills if fill_sig(r) not in rc.csig
             and r["trade_date"] not in conflict]
@@ -401,10 +479,125 @@ def recon_original(cfg: dict, fix: bool = False, prefer: str = "local") -> dict:
     return report
 
 
+def resolve_eod(day: str, prefer: str) -> int:
+    """--resolve-eod：eod 数值冲突的人工裁决（规则2显式逃生门）。
+    prefer=local → 以本地为准覆写云端；prefer=cloud → 以云端为准覆写本地。
+    只动该一行的对侧，绝不触碰其他日期；裁决后复检并打印指纹。"""
+    cfg = load_cfg()
+    cloud_alive(cfg)
+    rc = Recon(cfg)
+    if day not in rc.ldate or day not in rc.cdate:
+        print(f"[resolve] {day} 并非双侧共同行（本地={day in rc.ldate}，"
+              f"云端={day in rc.cdate}）→ 若仅一侧缺失属残缺，--gate 已可幂等补齐")
+        return 1
+    row = dict(rc.ldate[day] if prefer == "local" else rc.cdate[day])
+    if prefer == "local":
+        n = push_rows(cfg, "sb_shadow_eod", [row], "trade_date")
+        print(f"[resolve] {day} → 已以本地值覆写云端行（push {n}）")
+    else:
+        with sqlite3.connect(DB) as conn:
+            n = upsert_sqlite(conn, "eod", [row])
+        print(f"[resolve] {day} → 已以云端值覆写本地行（{n}）")
+    # 裁决终检：复对 + 指纹
+    rep = recon_original(cfg, fix=False, prefer=prefer)
+    lf, cf = table_fingerprint("eod", cfg)
+    code, msg = classify_report(rep, lf, cf)
+    print(f"[resolve] 裁决后复检：exit {code}（{msg}）")
+    return code
+
+
+def classify_report(rep: dict, fp_pair: tuple | None = None) -> tuple[int, str]:
+    """对账结果分类（唯一判定口径，--gate 与 --mobile 共用）：
+      2 = 不可调和冲突（fills 同日双写异笔 / eod 同键数值打架）→ 阻断记账
+      3 = 对账未完成（仍有残缺未收敛）→ 停手等待/下轮重试
+      0 = 对账统一（残缺清零；指纹给出则要求双侧相等）→ 允许记账"""
+    if rep.get("fills_conflict_dates") or rep.get("eod_mismatch"):
+        return 2, "不可调和冲突 → 阻断记账（--resolve-eod 显式裁决后放行）"
+    if any(rep.get(k) for k in ("eod_only_local", "eod_only_cloud",
+                                "fills_only_local", "fills_only_cloud")):
+        return 3, "对账未完成（仍有残缺未收敛）"
+    if fp_pair is not None and fp_pair[0] != fp_pair[1]:
+        return 2, "指纹不一致（残缺清零但内容有差）→ 阻断记账"
+    return 0, "对账统一"
+
+
+def gate_run(wait_minutes: float = 15.0, dry: bool = False) -> int:
+    """强制对账闸（T-Fin35）：信息已全（preflight 已过）→ 每次启动必跑。
+    「信息全但对账未完成」（云端运行中/网络抖动/残缺未收敛）= 继续对，
+    有界等待（--wait-minutes，缺省 15 分钟，60s 步进）而非直接退出。
+    exit 0=统一(允许记账)；2=冲突阻断；3=超时/凭证缺失（本侧停跑，他侧不受影响）。"""
+    cfg = load_cfg()
+    if not (cfg.get("SUPABASE_URL") and cfg.get("SUPABASE_KEY")):
+        print("[gate] ⚠ 本侧对账前提缺失（云端凭证不可用）→ 本侧停跑；"
+              "另一侧（云端/手机）不受影响，可继续跑")
+        return 3
+    deadline = time.time() + wait_minutes * 60
+    attempt = 0
+    while True:
+        attempt += 1
+        busy = cloud_busy()
+        try:
+            cloud_alive(cfg)                    # 区分「真一致」与「静默空读」
+        except Exception as e:  # noqa: BLE001
+            print(f"[gate] 对账通信异常（第{attempt}轮）：{e}")
+            busy = True                          # 无法通信 → 视为未完成
+        if busy:
+            print(f"[gate] 云端运行中/不可达 → 对账暂不定论（第{attempt}轮）")
+        else:
+            if not dry:
+                recon_original(cfg, fix=True, prefer="local")  # 幂等补齐（无判定）
+            rep = recon_original(cfg, fix=False, prefer="local")  # 全新复检定判
+            fp_e = table_fingerprint("eod", cfg)
+            fp_f = table_fingerprint("fills", cfg)
+            code, msg = classify_report(rep, fp_e)
+            if code != 0:
+                code, msg = classify_report(rep, fp_f)
+            if code == 2:                        # 冲突：dump 全量明细后阻断
+                print(f"[gate] ⚠ {msg}")
+                print(json.dumps(rep, ensure_ascii=False, indent=1, default=str))
+                return 2
+            if code == 0:
+                mode = "--dry 只读" if dry else "幂等补齐后"
+                print(f"[gate] 对账统一（{mode}）：eod 指纹 {fp_e[0]}＝{fp_e[1]}，"
+                      f"fills 指纹 {fp_f[0]}＝{fp_f[1]} → 允许记账")
+                return 0
+        if time.time() >= deadline:
+            print(f"[gate] 对账未完成超时（等待 {wait_minutes:g} 分钟，"
+                  "第" + str(attempt) + "轮）→ 本侧停跑；另一侧不受影响，可继续跑")
+            return 3
+        print(f"[gate] 待 60s 后重试（截止还剩 "
+              f"{max(0, deadline - time.time()):.0f}s）")
+        time.sleep(60)
+
+
 def main() -> None:
     if "--selftest" in sys.argv:
         sys.exit(selftest())
     today = date.today().strftime("%F")
+    if "--gate" in sys.argv:
+        wait = 15.0
+        argv = sys.argv
+        if "--wait-minutes" in argv:
+            i = argv.index("--wait-minutes")
+            if i + 1 >= len(argv):
+                print("[gate] --wait-minutes 需要数值参数")
+                sys.exit(1)
+            try:
+                wait = float(argv[i + 1])
+            except ValueError:
+                print("[gate] --wait-minutes 需要数值参数")
+                sys.exit(1)
+        sys.exit(gate_run(wait_minutes=wait, dry="--dry" in argv))
+    if "--resolve-eod" in sys.argv:
+        i = sys.argv.index("--resolve-eod")
+        day = sys.argv[i + 1] if i + 1 < len(sys.argv) else ""
+        prefer = ("cloud" if "--prefer-cloud" in sys.argv else "local")
+        if "--prefer-local" in sys.argv:
+            prefer = "local"
+        if not day:
+            print("[resolve] 用法：--resolve-eod YYYY-MM-DD --prefer local|cloud")
+            sys.exit(1)
+        sys.exit(resolve_eod(day, prefer))
     if "--recon" in sys.argv:
         rep = recon(load_cfg(), "--fix" in sys.argv,
                     "cloud" if "--prefer-cloud" in sys.argv else "local")
@@ -425,25 +618,37 @@ def main() -> None:
         init_db_from_cloud()
         return
     if "--mobile" in sys.argv:
-        # T-Fin31 修订：手机端闸 = 全量双向对帐 + 补齐（残缺即补、冲突停手；手机优先）；
-        # 加 --dry 则只读对帐不动账
-        rep = recon(load_cfg(), "--dry" not in sys.argv, "local")
+        # T-Fin31 修订：手机端快速闸 = 全量双向对帐 + 补齐（单轮，无长等待，
+        # 长等待有界重试语义归 --gate）。T-Fin35 严格分类：
+        # exit 0=统一(允许记账) / 2=冲突阻断 / 3=对账未完成(残缺未收敛/不可达)。
+        cfg = load_cfg()
+        if not (cfg.get("SUPABASE_URL") and cfg.get("SUPABASE_KEY")):
+            print("[mobile] ⚠ 云端凭证缺失 → 本侧停跑；另一侧不受影响")
+            sys.exit(3)
+        rep = recon(cfg, "--dry" not in sys.argv, "local")
         if rep is None:
             print("[mobile] 对账闸被跳过（云端环境），放行本地主链")
             sys.exit(0)
-        clean = all(not rep[k] for k in
-                    ("eod_only_local", "eod_only_cloud", "eod_mismatch",
-                     "fills_only_local", "fills_only_cloud",
-                     "fills_conflict_dates"))
-        if clean:
-            print("[gate] 双源对帐：本地与云端全一致，无残缺")
-        else:
-            print("[gate] 双源对帐：",
-                  json.dumps(rep, ensure_ascii=False, default=str))
-            if rep.get("fills_conflict_dates"):
-                print("[gate] ⚠ 同日双写冲突，已停手（fills 区）交人工对账"
-                      "↓ 明细如上")
-        sys.exit(0)                    # 闸结果不放倒本地日常流程
+        try:
+            cloud_alive(cfg)
+            fp_e = table_fingerprint("eod", cfg)
+            fp_f = table_fingerprint("fills", cfg)
+        except Exception as e:  # noqa: BLE001
+            print(f"[mobile] ⚠ 云端不可达 → 本侧停跑；另一侧不受影响：{e}")
+            sys.exit(3)
+        code, msg = classify_report(rep, fp_e)
+        if code != 0:
+            code, msg = classify_report(rep, fp_f)
+        print("[mobile] 双源对帐（严格分类）：", msg)
+        if rep.get("fills_conflict_dates") or rep.get("eod_mismatch"):
+            print("[mobile] ⚠ 冲突明细 ↓（--resolve-eod 显式裁决后放行）")
+            print(json.dumps(rep, ensure_ascii=False, indent=1, default=str))
+        elif code == 3:
+            print(json.dumps(rep, ensure_ascii=False, default=str))
+        elif code == 0:
+            print(f"[mobile] eod 指纹 {fp_e[0]}＝{fp_e[1]}，"
+                  f"fills 指纹 {fp_f[0]}＝{fp_f[1]}")
+        sys.exit(code)
     print(__doc__)
 
 

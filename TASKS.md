@@ -53,19 +53,36 @@
     ①git pull 云端状态回推 ②Supabase 对帐闸（pull 残缺）③云端缺日才本地灾备落库。
   - 旧根因确诊（10-22/23 两日云端 failure 铁证）：workflow 闸 2 对帐步骤用旧 recon
     空壳桩 → GA 环境 return None → --mobile TypeError → 闸 2 失败 → 上云/回推全跳过
-    （ lawsuits jobs API: 步骤2/3 success、闸2 failure、4/5 skipped——与两侧水位同停 10-21 完美互证）。
-    今日已推送的 recon 修复恰好命中；本地模拟 GA 环境实测 --mobile exit=0。
-  - 交付：①`run_daily_all.sh` 重排：-1 git pull → 0 对帐闸 → 0.5 判云
-    （shadow eod 含今日=云端已单写 → 只读收尾；workflow in-progress 经公共
-    Actions API 探测，至多等 15 分钟）→ 云端缺日本地灾备全链（影子
-    match/ledger --replay + fetch + daily_report + ensemble + 闸 2 语义对帐
-    + sync + 状态回推 repo）；周五审计+周报；周六 optimizer。②params cron
-    登记 40 16 * * 1-5（错峰）+ 0 9 * * 6（周末引擎）；③工具 crontab 实装
-    （16:40 工作日 + 周六 09:00，备份 .cache/crontab/crontab.bak）；
-    ④cloud_gate --cloud-runner 增周末守卫（防手动 dispatch 造成幻影 eod 行，
-    exit 9 语义=无操作）。
-  - 待验收（周一 2026-10-26）：云端 workflow 15:50 自动单写成功（eod/fills/repo
-    回推三落地），手机 16:40 判云走"只读收尾"分支、本地水位与云端齐平。
+    （Actions jobs API: 步骤2/3 success、闸2 failure、4/5 skipped——与两侧水位同停 10-21 互证）。
+    ba63976 已推送的 recon 修复恰好命中；本地模拟 GA 环境实测 --mobile exit=0。
+  - 交付：①params cron 登记 40 16 * * 1-5（错峰）+ 0 9 * * 6（周末引擎）；②工具 crontab
+    实装（16:40 工作日 + 周六 09:00，备份 .cache/crontab/crontab.bak）；③cloud_gate
+    --cloud-runner 增周末守卫（防手动 dispatch 幻影 eod 行，exit 9=无操作）；
+    ④run_daily_all.sh 初版重排——随后被 T-Fin35 业主新规重构覆盖（见下）。
+  - 待验收（周一 2026-10-26）：云端 workflow 15:50 自动单写成功（eod/fills/repo 回推
+    三落地），手机 16:40 走对账闸→幂等护栏分支、本地水位与云端齐平。
+- [x] T-Fin35（✅2026-10-24 完成，业主对账规则拍板）：信息全不全/对账/记账三段分离——闸先行统一状态
+  - 拍板口径（四规则三问答）：①仅"信息不全"才停跑（数据完整性与对账**彻底分离**）；
+    ②每次启动**第一件事=强制对账**（无论上轮是否对过）；③对账统一前绝不记账
+    （daily_report 隔离）；④云端与本地同一份代码同一标准。补充拍板：断网/凭证缺失=
+    **本侧停跑、他侧不受影响**；eod 数值冲突=**阻断+显式裁决工具**（废除"手机优先
+    静默覆盖"）；云端运行中等待默认 15 分钟。
+  - 交付：①`scripts/preflight.py`（新）：只读完整性检查（params/watchlist/6 标的
+    CSV 行数表头/账本 JSON 结构/风控态/影子态/DB 两表）——缺失精确清单 exit 1，零写入；
+    ②`cloud_gate.py` 重构：新增 `--gate --wait-minutes N`（有界状态机：凭证缺失立即
+    本侧停→云端 workflow in-progress 探测等待→可达后幂等补齐+全新只读复检定判；
+    exit 0/2/3=统一/冲突阻断/超时）、`classify_report` 唯一判定口径、`fingerprint`
+    统一校验指纹（sha256 canonical，行序/列序无关，int=float 规范，eod/fills 投影列
+    双端一致）、`cloud_alive` 可达性探针（区分"真一致"与"静默空读"误判）、
+    `--resolve-eod DATE --prefer local|cloud` 人工裁决工具（对侧单行覆写+复检+指纹回显）；
+    ③`recon_original`：eod 同键异值不再 prefer 覆盖 → 列明细阻断（防脏数据铁则）；
+    `--mobile` 升级严格分类退出码（统一口径共用）；自测扩到 **13 项全绿**；
+    ④`run_daily_all.sh` 强制顺序：git pull → preflight（不全 exit 1 零写入）→ --gate
+    （0/2/3 映射：记账/人工裁决/下轮重试）→ fetch → 幂等护栏（台账/影子 eod 水位
+    ≥行情最新日 → 跳过记账防双写）→ 影子 chain/daily_report/ensemble → 记账后
+    --gate(短等) → sync → 状态回推 repo；周五审计+周报 / 周六 optimizer 仍闸后可达。
+  - 验收：真实环境 --gate exit=0 两表指纹相等；--mobile 严格分类 exit=0；
+    workflow 闸 0 云端路径、--init-db、--selftest 全兼容。
 
 - [x] T-Fin31 云端灾备代跑（✅2026-10-21 完成：三点拍板落地 + 双源对帐修订令）
   - 拍板执行：repo 公共（业主面板切换）/ 手机优先（闸 0 exit 9 语义）/ HTTPS token。

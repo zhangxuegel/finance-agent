@@ -1,100 +1,102 @@
 #!/bin/bash
-# run_daily_all.sh —— 收盘调度入口（T-Fin34 起：云端为主线、本地对帐落库）
+# run_daily_all.sh —— 收盘调度入口（T-Fin35 对账规则重构版）
 #
-# 业主 2026-10-24 拍板改版（T-Fin31 的"手机优先"反转）：
-#   -1) git pull   接收云端 cloud-runner 的状态回推（repo=账本真源的传播通道）
-#    0) cloud_gate --mobile  双源对帐（残缺回灌 / 冲突停手；幂等）
-#    0.5) 判云：若本地影子 eod 已含【今日 SH 交易日】（云端已单写完成）→ 本轮
-#         只做对帐收尾，不重复落库（单日单写者纪律）。等待规则：若云端
-#         workflow 仍 run-in-progress（GitHub Actions 公共 API 免凭证可查），
-#         至多等 WAIT_TIMEOUT_MIN 再判一次；云端失败/无记载才进入本地灾备。
-#    1+）本地灾备链（仅云端缺日时）：影子补撮合/落库(--replay) → fetch →
-#        daily_report → ensemble → 对帐闸 → 上云 → 状态回推 repo。
-#   周五：风控综合审计 + 周末深度复盘（分析件，不触碰账本）。
-#   周六：策略进化引擎（网格+OOS 拦截）。
-#
-# 台账：index/params.yaml → cron.schedule(本地错峰 16:40) / workflow(云端 15:50)
+# 业主 2026-10-24 业务规则（对账闸重构，流水线强制顺序）：
+#   -1) git pull          接收云端状态回推（失败仅警告，由对账闸兜底判定）
+#    0) 数据完整性检查     preflight.py --check（只读；不全 → 精确清单 → 停跑）
+#    1) 强制对账           cloud_gate.py --gate（每次启动必跑，关上一轮之事；
+#                          统一=允许记账；冲突=阻断；未完成=有界等待 15 分钟）
+#    2) 记账/推进          仅在对账统一后进入，幂等护栏防双写：
+#                          fetch → 台账未推进才跑 影子 match/ledger/review
+#                          + daily_report + ensemble
+#    3) 记账后再对帐       --gate（同 标准）→ 上云 → 状态回推 repo
+#    4) 周五审计+周报 / 周六 optimizer（分析件，仍在对账统一之后）
+#   「谁缺谁停」：本侧断网/凭证缺失 → 本侧停跑（exit 3），他侧不受影响。
+# 台账：index/params.yaml → cron.schedule(本地 16:40) / 云端 workflow(15:50)
 set -u
 cd "$HOME/finance-agent" || exit 1
 echo "== run_daily_all $(date '+%F %T') =="
 LOG_TAG="[run daily]"
 
-# -1) 接收云端状态回推（网络失败不阻断本地）
-git pull --ff-only 2>/dev/null || echo "$LOG_TAG git pull 失败（离线/无缘——继续本地）"
+# -1) 接收云端状态回推
+git pull --ff-only 2>/dev/null || echo "$LOG_TAG [warn] git pull 失败（对账闸将兜底判定）"
 
-# 0) 双源对帐闸（残缺回灌；冲突停手提示人工）
-python3 scripts/cloud_gate.py --mobile || echo "$LOG_TAG [mobile] 对帐闸异常（凭证缺失=放行本地主链）"
-
-# 判云辅助：GitHub Actions 最近一次 daily_close 运行状态（公共 API，无凭证）
-gh_run_state() {
-  curl -fsS --max-time 15 \
-    "https://api.github.com/repos/zhangxuegel/finance-agent/actions/workflows/daily_close.yml/runs?per_page=1" 2>/dev/null \
-  | python3 -c "import json,sys
-try:
-    r=json.load(sys.stdin)['workflow_runs'][0]
-    print(r['created_at'][:10], r['status'], r['conclusion'] or '-')
-except Exception:
-    print('unknown')" \
-  || echo "unknown"
-}
-
-# 本地影子 eod 是否含今日 SH 交易日（=今日已完成单写）
-have_today_eod() {
-  python3 scripts/cloud_gate.py --cloud-runner >/dev/null 2>&1
-  [ $? -eq 9 ]   # exit 9 = 今日 eod 已落库（单写闸语义复用）
-}
-
-# 0.5) 判云
-TF=$(date +%u)   # 1=Mon ... 5=Fri, 6=Sat, 7=Sun
-if [ "$TF" -le 5 ]; then
-  WAIT_MIN=15
-  waited=0
-  while [ $waited -lt $WAIT_MIN ]; do
-    if have_today_eod; then
-      echo "$LOG_TAG 判云：今日 eod 已由云端单写落库 → 本轮对帐收尾，不重复落库"
-      if [ "$TF" = "5" ]; then
-        python3 scripts/risk_control.py --audit || exit 4
-        python3 scripts/report_generator.py --weekly || exit 6
-      fi
-      exit 0
-    fi
-    state=$(gh_run_state)
-    today=$(date +%F)
-    case "$state" in
-      "$today in-progress"*|"$today pending"*|"$today queued"*|"$today waiting"*)
-        echo "$LOG_TAG 判云：云端 workflow 进行中（$state）→ 等待 …"
-        sleep 60; waited=$((waited + 1)) ;;
-      *)
-        break ;;
-    esac
-  done
-
-  # 云端缺日 → 本地灾备全链（= workflow 代跑本地版，逐一步等价）
-  echo "$LOG_TAG 判云：今日云端未落库 → 本地灾备链启动"
-  set +e
-  python3 scripts/shadow_broker.py --match   --replay   # 真实 open 撮合（收盘后口径）
-  python3 scripts/shadow_broker.py --ledger  --replay   # eod REPLACE 落库
-  python3 scripts/shadow_broker.py --review  --replay   # 推送可降级
-  set -e
-  python3 scripts/fetch_data.py      || exit 1
-  python3 scripts/daily_report.py    || exit 2
-  python3 scripts/ensemble_engine.py --daily --replay 20 || exit 3
-  python3 scripts/push_notification.py --push-auto || echo "[warn] webhook 未配置"
-  # 同步前对帐（同 workflow 闸 2 语义）
-  python3 scripts/cloud_gate.py --mobile --dry || true
-  python3 scripts/cloud_gate.py --mobile || true
-  set +e
-  bash sync_all.sh
-  git add -A data index reports logs 2>/dev/null || true
-  if ! git diff --cached --quiet; then
-    git commit -q -m "mobile-runner: 本地灾备落库（云端缺日接管）" \
-      -m "T-Fin34：云端为主线，本地仅在缺日时单写灾备；详见当日报告"
-    git push 2>/dev/null || echo "$LOG_TAG [warn] 状态回推 push 失败（本地已落库）"
-  fi
-  set -e
+# 0) 数据完整性检查（只读；缺失清单精确打印 → 停跑）
+python3 scripts/preflight.py
+if [ $? -ne 0 ]; then
+  echo "$LOG_TAG 信息不全 → 停跑（本轮零写入）"
+  exit 1
 fi
 
-# 周六（周末）：策略进化引擎（网格+OOS 拦截，含 T-Fin04 赛马寻优）
+# 1) 强制对账闸（每次启动必跑；exit 0/2/3 语义见 cloud_gate.py --gate）
+python3 scripts/cloud_gate.py --gate --wait-minutes "${GATE_WAIT:-15}"
+gate_rc=$?
+case "$gate_rc" in
+  0) echo "$LOG_TAG 对账统一 → 允许记账" ;;
+  2) echo "$LOG_TAG ⚠ 不可调和冲突 → 阻断记账（明细见上；人工 --resolve-eod 裁决）"
+     exit 2 ;;
+  *) echo "$LOG_TAG 对账未完成（本侧停跑，他侧不受影响；下轮重试）"
+     exit 3 ;;
+esac
+
+# 记账幂等护栏说明：fetch 先行把行情推到最新，再用「台账/影子 eod 水位
+# 是否到达行情最新交易日」判定记账是否已完成（云端回推/先前已跑一致时跳过，
+# 防双写）。
+
+# 2) 记账/推进（仅对账统一后可达）
+python3 scripts/fetch_data.py || exit 1
+read -r PORT_LAST SHADOW_MAX <<EOF
+$(python3 - <<'PY'
+import csv, json, os, sqlite3
+with open("data/510300.csv", newline="", encoding="utf-8") as f:
+    rows = list(csv.DictReader(f))
+latest = rows[-1]["date"] if rows else ""
+port = json.load(open("data/portfolio.json", encoding="utf-8"))
+try:
+    with sqlite3.connect("data/shadow_live.db") as c:
+        shadow = c.execute("SELECT MAX(trade_date) FROM eod").fetchone()[0] or ""
+except Exception:
+    shadow = ""
+print(port.get("last_date") or "", shadow, latest)
+PY
+)
+EOF
+echo "$LOG_TAG 台账水位：portfolio=$PORT_LAST / 影子eod=$SHADOW_MAX"
+TF=$(date +%u)   # 1=Mon ... 6=Sat, 7=Sun
+
+if [ "$TF" -le 5 ]; then
+  if [ "$SHADOW_MAX" != "$(python3 -c "import csv;print(list(csv.DictReader(open('data/510300.csv')))[-1]['date'])")" ]; then
+    echo "$LOG_TAG 影子账未推进 → 收盘补撮合/落库（--replay，真实 open 口径）"
+    python3 scripts/shadow_broker.py --match  --replay || echo "$LOG_TAG [warn] 影子撮合异常"
+    python3 scripts/shadow_broker.py --ledger --replay || echo "$LOG_TAG [warn] 影子落库异常"
+    python3 scripts/shadow_broker.py --review --replay || echo "$LOG_TAG [warn] 推送可降级"
+  fi
+  if [ "$PORT_LAST" != "$SHADOW_MAX" ] || [ "$PORT_LAST" = "" ]; then
+    echo "$LOG_TAG 核心账本未推进 → daily_report + ensemble"
+    python3 scripts/daily_report.py    || exit 2
+    python3 scripts/ensemble_engine.py --daily --replay 20 || exit 3
+    python3 scripts/push_notification.py --push-auto || echo "$LOG_TAG [warn] webhook 未配置"
+  else
+    echo "$LOG_TAG 记账已完成（云端回推/先前已跑）→ 幂等跳过，不双写"
+  fi
+  # 3) 记账后再对帐（同一标准）→ 上云
+  python3 scripts/cloud_gate.py --gate --wait-minutes 3 || echo "$LOG_TAG [warn] 记账后对帐未统一（行内人工介入）"
+  bash sync_all.sh || echo "$LOG_TAG [warn] 上云异常（本地已留痕）"
+  # 4) 状态回推 repo（本地发生过写入才提交）
+  git add -A data index reports logs 2>/dev/null || true
+  if ! git diff --cached --quiet; then
+    git commit -q -m "local-runner: 本地记账/对帐留痕（T-Fin35 流水线）" \
+      -m "preflight→gate→记账→gate→sync 链路痕迹；详见当日报告"
+    git push 2>/dev/null || echo "$LOG_TAG [warn] 状态回推 push 失败（本地已留痕）"
+  fi
+  # 周五：风控综合审计 + 周末深度复盘（分析件）
+  if [ "$TF" = "5" ]; then
+    python3 scripts/risk_control.py --audit || exit 4
+    python3 scripts/report_generator.py --weekly || exit 6
+  fi
+fi
+
+# 周六：策略进化引擎（网格+OOS 拦截）——同样在对账统一之后
 if [ "$TF" = "6" ]; then
   python3 scripts/optimizer.py            || exit 5
   python3 scripts/optimizer.py --ensemble || exit 5
