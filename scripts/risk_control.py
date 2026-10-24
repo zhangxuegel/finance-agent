@@ -148,16 +148,9 @@ def audit_fill_time_lock(params: dict | None = None,
     prev_day_map: dict[str, dict[str, str]] = {}
 
     def _recode(code: str):
-        """把前复权 CSV 重构为不复权 raw 口径。"""
-        kl = fetch_data.load_csv(code)
-        evs = sorted(str(e.get("ex_date")) for e in div.get(code, []))
-        out = []
-        for k in kl:
-            rebase = sum(float(str(div[code][j].get("per_share", 0)))
-                         for j in range(len(evs)) if evs[j] > k["date"])
-            out.append({**k, "open": k["open"] + rebase, "close": k["close"] + rebase,
-                        "high": k["high"] + rebase, "low": k["low"] + rebase})
-        return out
+        """把前复权 CSV 重构为不复权 raw 口径（T-Fin33 起统一走
+        fetch_data.load_raw_csv 单一事实源）。"""
+        return fetch_data.load_raw_csv(code, p)
 
     def ensure(code: str):
         if code not in cache:

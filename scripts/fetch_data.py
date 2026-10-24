@@ -110,15 +110,20 @@ def _klines_tencent(secid: str, natural_days: int) -> list[dict]:
 
 # ---------------------------------------------------------------------------
 # 对外接口
-def fetch_klines(secid: str, natural_days: int = DEFAULT_YEARS * NATURAL_PER_YEAR) -> list[dict]:
-    """抓日线并按日期正序返回。两个数据源都失败则抛 RuntimeError。"""
+def fetch_klines(secid: str, natural_days: int = DEFAULT_YEARS * NATURAL_PER_YEAR,
+                 start_date: str | None = None) -> list[dict]:
+    """抓日线并按日期正序返回。两个数据源都失败则抛 RuntimeError。
+
+    start_date（T-Fin33 登记 series.from）：引擎信号/撮合窗口要求台账数据
+    与孕育期逐根一致——给定时用该交易日精确截断（含该日），不再按 自然日 回退。"""
     try:
         data = _klines_east(secid, natural_days)
     except Exception:  # noqa: BLE001 —— 东财限流/断连 → 降级腾讯
         data = []
     if len(data) < 30:
         data = _klines_tencent(secid, natural_days)
-    cutoff = (datetime.now() - timedelta(days=natural_days)).strftime("%Y-%m-%d")
+    cutoff = start_date or (datetime.now() - timedelta(days=natural_days)
+                            ).strftime("%Y-%m-%d")
     data = [k for k in data if k["date"] >= cutoff]
     if len(data) < 30:
         raise RuntimeError(f"行情抓取失败或数据过少: {secid}（{len(data)} 条）")
@@ -180,6 +185,31 @@ def load_csv(code: str, data_dir: str | None = None) -> list[dict]:
     return rows
 
 
+def load_raw_csv(code: str, params: dict | None = None,
+                 data_dir: str | None = None) -> list[dict]:
+    """T-Fin33（业主拍板 a）：台账成交价的不复权 raw 口径单一事实源。
+
+    raw(d) = qfq(d) + Σ{已登记分红、除息日>d 的每股派现}（params.dividends；
+    与 risk_control.audit_fill_time_lock._recode 同一公式）。除息事件须及时
+    登记——对"未来补登"具有不变性（补登不减旧）。全链信号与撮合统一在
+    raw 序列上进行，与审计口径完全一致。"""
+    rows = load_csv(code, data_dir)
+    div = (params or load_params()).get("dividends") or {}
+    evs = sorted(str(e.get("ex_date")) for e in div.get(code, []))
+    if not evs:
+        return rows
+    out = []
+    for k in rows:
+        rebase = sum(float(str(div[code][j].get("per_share", 0)))
+                     for j in range(len(evs)) if evs[j] > k["date"])
+        if rebase:
+            k = {**k, "open": k["open"] + rebase,
+                 "close": k["close"] + rebase,
+                 "high": k["high"] + rebase, "low": k["low"] + rebase}
+        out.append(k)
+    return out
+
+
 def fetch_and_save(secid: str, code: str, natural_days: int,
                    data_dir: str | None = None) -> str:
     """抓取并落盘到指定目录（crash_test 用：长历史黑天鹅数据）。"""
@@ -203,10 +233,16 @@ def main() -> int:
     if not wanted:
         print("标的代码不在 watchlist 中:", codes)
         return 2
+    series_from = (load_params().get("series") or {}).get("from")   # T-Fin33
     natural_days = DEFAULT_YEARS * NATURAL_PER_YEAR
+    if series_from:
+        natural_days = max(natural_days,
+                           (datetime.now()
+                            - datetime.strptime(series_from, "%Y-%m-%d")
+                            ).days + 5)
     summary = []
     for w in wanted:
-        kl = fetch_klines(w["secid"], natural_days)
+        kl = fetch_klines(w["secid"], natural_days, start_date=series_from)
         info = validate(kl, w["code"], natural_days)
         path = save_csv(kl, w["code"])
         summary.append({**w, **info, "path": path})

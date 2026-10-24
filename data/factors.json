@@ -8,7 +8,7 @@
  "light": "red",
  "light_label": "🔴 红灯",
  "close": 4.24,
- "rows": 722,
+ "rows": 725,
  "score": 1,
  "source": "rule(回放确定性; 回放模式新闻不可回溯（时间锁）)",
  "raw": null,

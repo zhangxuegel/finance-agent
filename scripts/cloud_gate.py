@@ -411,6 +411,10 @@ def main() -> None:
         print(json.dumps(rep, ensure_ascii=False, indent=1, default=str))
         return
     if "--cloud-runner" in sys.argv:
+        today_arg = date.today()
+        if today_arg.weekday() >= 5:
+            print("[gate] 非交易日(周末) → 云端 runner 无操作（防幻影 eod 行）")
+            sys.exit(9)
         got = cloud_rows(load_cfg(), today, "sb_shadow_eod")
         if got:
             print(f"[gate] 今日({today}) eod 已由手机落库 → 云端 runner 跳过")

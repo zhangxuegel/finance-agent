@@ -30,16 +30,42 @@
   - 端到端：云端回读 sb_shadow_eod 尾 4 行 = 10-23/10-22/10-21/10-20，两侧一致；
     risk_control --audit（186 笔合规 PASS）+ validate_sim 全绿 + test_sim 全绿；
     fetch 覆盖 2023-10-25~2026-10-23（726 行）。
-- [ ] T-Fin33（登记待拍板）：重放引擎与台账锚点口径的结构性分歧
-  - 现象：`daily_report.py --replay N` 的全新账户起步用 `i0=warmup`（warmup 窗口后
-    第一信号日建仓），而台账真账首日是 params.anchor.date=2023-11-17 的等权锚定
-    建仓（engine 全链无实现、仅 audit 豁免引用）。当日实测：重放 186 笔中 185 笔
-    与真账不同，10-23 净值差 ¥21,311（1,541,299 vs 1,519,988）。
-  - 影响：①--replay 全量重放的数字与真账不可比，误用会导致"两个账本"；
-    ②任何下游若把重放当校验基准都会误报（当日已排险：真账自 HEAD 归位）。
-  - 候选处置（业主拍板其一）：a) engine 实现锚点建仓→重放=真账可当校验器；
-    b) 只读侧维持现状，重放标记"演示口径"并在文档/register 登记不可互查。
-    风控红线不动：熔断、LLM 无下单权均不受影响。
+- [x] T-Fin33（✅2026-10-24 完成，业主拍板方案 a）：数据窗口归位 → 重放=真账校验器（双胞胎全等达成）
+  - 根因链（实证）：账本孕育于 2026-10-19（git e6f93c9），当时腾讯 raw CSV 起点
+    **2023-10-20**；10-21 大重抓被截到 10-25（缺 5 根）→ MA20 成熟点 11-16 后移至
+    11-21，且 `signal_series_a` warmup 不足期输出 0（卖信号）→ 重放在 11-20
+    全仓卖出，与真账（持仓至 11-23）逐笔分叉 185/186、净值差 ¥21,311。
+    "锚点建仓"实为引擎 warmup 成熟后首日（dates[20]=2023-11-17）的自然金叉
+    建仓（sig(11-16)=1，518880 因 sig=0 天然剔除=3 只）；T-Fin27 audit 的
+    anchor 豁免只是掩盖缺史现象。
+  - 交付：①`fetch_data.load_raw_csv`（raw=qfq+Σ{除息日>d}分红，单一事实源，
+    audit `_recode` 改为复用）；②params 登记 `series.from: 2023-10-20`（含根因链
+    注释），fetch_klines 支持 start_date 精确截断，main 依 series.from 重抓
+    →6 标的 729 行（2023-10-20~2026-10-23）；③daily_report.engine_run 全链改
+    raw 口径；④回滚合成锚点——自然引擎即可复现。
+  - 验收：`--backtest` 双胞胎 diff：**186/186 逐笔一致、709 日曲线 0 偏差、
+    净值 ¥1,519,987.97 分毫不差**；risk_control --audit（186 笔合规）/
+    validate_sim / test_sim 全绿；考古互证（2023-10-20 raw 3.583/3.582 逐位吻合）。
+  - 纪律声明：sha 台账窗口今后**禁止再移动**（params.series.from 是绝对项），
+    移动=MA 成熟点移位=重放失效（T-Fin27 audit 会报价差提醒）。
+- [~] T-Fin34（2026-10-24 实装完毕，待周一 16:40 首次自动运行验收）：云端为主线、本地对帐落库
+  - 拍板：日常链以 GitHub Actions daily_close（北京 15:50）为单写者主跑；本地降级为
+    ①git pull 云端状态回推 ②Supabase 对帐闸（pull 残缺）③云端缺日才本地灾备落库。
+  - 旧根因确诊（10-22/23 两日云端 failure 铁证）：workflow 闸 2 对帐步骤用旧 recon
+    空壳桩 → GA 环境 return None → --mobile TypeError → 闸 2 失败 → 上云/回推全跳过
+    （ lawsuits jobs API: 步骤2/3 success、闸2 failure、4/5 skipped——与两侧水位同停 10-21 完美互证）。
+    今日已推送的 recon 修复恰好命中；本地模拟 GA 环境实测 --mobile exit=0。
+  - 交付：①`run_daily_all.sh` 重排：-1 git pull → 0 对帐闸 → 0.5 判云
+    （shadow eod 含今日=云端已单写 → 只读收尾；workflow in-progress 经公共
+    Actions API 探测，至多等 15 分钟）→ 云端缺日本地灾备全链（影子
+    match/ledger --replay + fetch + daily_report + ensemble + 闸 2 语义对帐
+    + sync + 状态回推 repo）；周五审计+周报；周六 optimizer。②params cron
+    登记 40 16 * * 1-5（错峰）+ 0 9 * * 6（周末引擎）；③工具 crontab 实装
+    （16:40 工作日 + 周六 09:00，备份 .cache/crontab/crontab.bak）；
+    ④cloud_gate --cloud-runner 增周末守卫（防手动 dispatch 造成幻影 eod 行，
+    exit 9 语义=无操作）。
+  - 待验收（周一 2026-10-26）：云端 workflow 15:50 自动单写成功（eod/fills/repo
+    回推三落地），手机 16:40 判云走"只读收尾"分支、本地水位与云端齐平。
 
 - [x] T-Fin31 云端灾备代跑（✅2026-10-21 完成：三点拍板落地 + 双源对帐修订令）
   - 拍板执行：repo 公共（业主面板切换）/ 手机优先（闸 0 exit 9 语义）/ HTTPS token。

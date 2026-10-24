@@ -59,6 +59,14 @@ anchor:
   # 亦不依赖未来价格）。audit_fill_time_lock 仅对该日 BUY 豁免"前一日信号"校验。
   date: "2023-11-17"
 
+series:
+  # ---- T-Fin33 登记（业主拍板 a）：信号/撮合口径的数据窗口起点 ----
+  # 来源：git e6f93c9 台账孕育证据——当年腾讯 raw CSV 首行=2023-10-20；
+  # 2026-10-21 大重抓被截到 2023-10-25（缺 5 根）→ MA20 成熟点后移，
+  # warmup 期 sig=0 引擎在 11-20 全仓卖出——重放与真账分歧 185/186 笔的根因。
+  # 引擎窗口必须与孕育期逐根一致：多一天/少一天都会移位 MA 成熟点与交叉判定。
+  from: "2023-10-20"
+
 positions:
   # 目标权重：持仓时等权分配，1/n_assets（由脚本按 watchlist 求倒数）
   target_weight: 0.25          # 登记参考值 = 1 / 当前资产数（watchlist）
@@ -145,9 +153,13 @@ push:
   allow_remote_env: FIN_PUSH_ALLOW
 
 cron:
-  schedule: "30 15 * * 1-5"     # A股收盘后 15:30 交易日自动执行
-  morning_schedule: "0 8 * * 1-5"  # T-Fin04：每个交易日 8:00 生成晨报（一睁眼可见）
-  weekly_report: "0 9 * * 6"    # 周六 9:00 周末深度复盘（含溯源）
+  # ---- T-Fin34 改版（业主 2026-10-24 拍板：云端为主线、本地对帐落库）----
+  # 云端主线：GitHub Actions daily_close（北京 15:50）——单写者。
+  # 本地错峰：交易日 16:40 拉取+对帐；仅云端缺日才本地灾备落库。
+  schedule: "40 16 * * 1-5"     # 本地对帐闸错峰（晚于云端 15:50）
+  # morning_schedule "0 8 * * 1-5"（T-Fin04 晨报）：登记保留，两版 crontab 均未装载——
+  # 云端主线版（T-Fin34）不排晨报；如需启用须同时登 crontab 与 runner 改造。
+  weekly_report: "0 9 * * 6"    # 周六 9:00 周末引擎（optimizer 网格+OOS 拦截）
   runner: scripts/run_daily_all.sh
 
 factor:

@@ -48,7 +48,10 @@ def engine_run(start_date: str | None = None, report_from: str | None = None,
     codes = [w["code"] for w in watch]
     params["n_assets"] = len(codes)
 
-    kline_by = {c: fetch_data.load_csv(c) for c in codes}
+    # T-Fin33（业主拍板 a）：全链（行情/信号/估值）统一 raw 口径
+    # （= qfq + Σ{除息日>d}分红，与 audit_fill_time_lock 同一公式），
+    # 重放与真账从此同源可互检。
+    kline_by = {c: fetch_data.load_raw_csv(c, params) for c in codes}
     dates = sorted(set.intersection(*[{k["date"] for k in kl} for kl in kline_by.values()]))
     by_date = {c: {k["date"]: k for k in kl} for c, kl in kline_by.items()}
 
@@ -65,6 +68,9 @@ def engine_run(start_date: str | None = None, report_from: str | None = None,
     port = portfolio.load_state()
     if port is None or not port.get("curve"):
         port = portfolio.reset_state(params)
+        # T-Fin33（业主拍板 a）：台账孕育首日=dates[warmup]（自然 MA 成熟点），
+        # open 起自然金叉建仓——git e6f93c9 账本首日 2023-11-17 即该点（起跑=锚点），
+        # 重放与真账同源可互检；params.anchor.date 作 audit 豁免与说明位保留。
         i0 = warmup
     else:
         i0 = dates.index(port["last_date"]) + 1 if port["last_date"] in dates else warmup
