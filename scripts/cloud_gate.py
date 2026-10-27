@@ -116,6 +116,22 @@ def cloud_all_paged(cfg: dict, table: str, page: int = 1000,
     return out
 
 
+RUNNER_DDL = """
+CREATE TABLE IF NOT EXISTS eod (
+  trade_date TEXT PRIMARY KEY, nav REAL, nav_prev REAL, day_ret REAL,
+  bench_index_close REAL, bench_index_pct REAL,
+  alpha REAL, defense INTEGER, fills_n INTEGER, lock_remaining INTEGER,
+  notes TEXT);
+CREATE TABLE IF NOT EXISTS fills (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  ts TEXT, trade_date TEXT, leg TEXT, code TEXT, side TEXT,
+  shares INTEGER, price REAL, fee REAL, reason TEXT,
+  limit_blocked INTEGER DEFAULT 0);
+CREATE TABLE IF NOT EXISTS events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT, kind TEXT, detail TEXT);
+"""
+
+
 def init_db_from_cloud(quiet: bool = False) -> dict:
     """Actions 冷启动：临时 runner 上无本地 db → 从云端整卷重建
     （eod 全量 + fills 全量），净值链/撮合锁口径与手机同源。幂等（REPLACE）。"""
@@ -123,6 +139,10 @@ def init_db_from_cloud(quiet: bool = False) -> dict:
     rep = {}
     with sqlite3.connect(DB) as conn:
         conn.execute("PRAGMA busy_timeout=5000")
+        # T-Fin37：runner 冷启动 DB 为全新空文件 → 先建与手机端逐位一致的
+        # sqlite schema（Postgres 版 cloud_schema.sql 不适用于 sqlite），
+        # 否则 PRAGMA table_info 返回空列 → REPLACE INTO eod() 语法错。
+        conn.executescript(RUNNER_DDL)
         eod = cloud_all_paged(cfg, "sb_shadow_eod")
         fills = cloud_all_paged(cfg, "sb_shadow_fills",
                                 order="trade_date.asc.id.asc")
