@@ -1,11 +1,11 @@
 {
- "prev_date": "2026-10-19",
+ "prev_date": "2026-10-23",
  "light": "red",
  "gate_extras": {
-  "newest": 0.000944,
-  "worst5": -0.01211,
+  "newest": 0.017288,
+  "worst5": -0.018638,
   "hi60": 4.801,
-  "latest": 4.24,
+  "latest": 4.178,
   "recovered": false
  },
  "defense": true,
@@ -21,30 +21,44 @@
    "510300": 1.0,
    "159915": 1.0,
    "513500": 0.0,
-   "518880": 0.0
+   "518880": 1.0
+  },
+  "D": {
+   "510300": 1.0,
+   "159915": 1.0,
+   "513500": 0.0,
+   "518880": 1.0
   }
+ },
+ "prev_sig_e": 0.0,
+ "def_leg": {
+  "code": "510880",
+  "signal": 0.0,
+  "defensive": true,
+  "note": "T-Fin28 防守豁免位：黄/红灯不清仓"
  },
  "core": [
   "510300",
   "159915",
   "513500",
-  "518880"
+  "518880",
+  "510880"
  ],
  "race_pending": true,
  "target_weights": {
-  "weight_a": 0.45,
-  "weight_b": 0.45,
+  "weight_a": 0.18,
+  "weight_b": 0.27,
   "c_buffer": 0.1
  },
- "trade_date": "2026-10-20",
+ "trade_date": "2026-10-27",
  "mode": {
-  "date": "2026-10-20",
+  "date": "2026-10-27",
   "mode": "live",
   "reason": "",
-  "ts": "2026-10-20 04:27:37"
+  "ts": "2026-10-27 21:56:25"
  },
  "engine_gate": {
-  "date": "2026-10-19",
+  "date": "2026-10-23",
   "defense": true,
   "light": "red",
   "crash_gate": true

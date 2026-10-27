@@ -43,3 +43,5 @@
 2026-10-21 19:06:16 [cloud_sync_fatal] 云端写入失败 sb_shadow_eod: HTTP 401 {"message":"Unregistered API key","hint":"Double check the provided API key as it is not registered for this project."}
 2026-10-21 19:30:48 [cloud_sync] eod+1 fills+0 → {'sb_shadow_eod': 1, 'sb_shadow_fills': 0}
 2026-10-24 06:21:12 [cloud_sync] eod+2 fills+0 → {'sb_shadow_eod': 2, 'sb_shadow_fills': 0}
+2026-10-27 13:56:27 [stage_fatal] stage_match: KeyError 'D'
+2026-10-27 13:57:53 [cloud_sync] eod+1 fills+0 → {'sb_shadow_eod': 1, 'sb_shadow_fills': 0}
