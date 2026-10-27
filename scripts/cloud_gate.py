@@ -351,9 +351,30 @@ def table_fingerprint(table: str, cfg: dict) -> tuple[str, str]:
 
 
 def cloud_alive(cfg: dict) -> None:
-    """云端可达性探针：不可达抛异常（与「静默回空」区分，防误判为对账一致）。"""
-    if not cloud_rows(cfg, "1990-01-01", "sb_shadow_eod"):
-        raise ConnectionError("云端只读探针失败（网络/凭证）")
+    """云端可达性探针：不可达抛异常（与「静默回空」区分，防误判为对账一致）。
+
+    T-Fin37 修订：自带探测请求，异常细节透传（旧版依赖 cloud_rows 吞异常回空，
+    只剩"网络/凭证"四字，401/断网/空表无法区分——runner 侧排障黑洞）。"""
+    url, key = cfg.get("SUPABASE_URL"), cfg.get("SUPABASE_KEY")
+    if not (url and key):
+        raise ConnectionError("云端凭证缺失（SUPABASE_URL/KEY）")
+    req = urllib.request.Request(
+        f"{url.rstrip('/')}/rest/v1/sb_shadow_eod?select=trade_date&limit=1",
+        headers={"apikey": key, "Authorization": f"Bearer {key}"})
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            body = r.read()
+        if json.loads(body or "[]"):
+            return
+        raise ConnectionError("云端探针连通但 0 行（sb_shadow_eod 空表？）")
+    except urllib.error.HTTPError as e:
+        detail = e.read().decode(errors="replace")[:160]
+        raise ConnectionError(f"云端探针 HTTP {e.code}（凭证/权限）: {detail}") from e
+    except ConnectionError:
+        raise
+    except Exception as e:  # noqa: BLE001
+        raise ConnectionError(
+            f"云端探针网络异常: {type(e).__name__}: {e}") from e
 
 
 REPO = "zhangxuegel/finance-agent"      # 公共仓库 Actions 状态探测（无凭证）
