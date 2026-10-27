@@ -49,12 +49,13 @@ jobs:
 
       - name: 注入密钥（进程级环境，不落盘）
         run: |
-          printf 'SUPABASE_URL=%s\nSUPABASE_KEY=%s\nGLM_API_KEY=%s\n' \
-            "$SUPA_URL" "$SUPA_KEY" "$GLM_KEY" >> "$GITHUB_ENV"
+          printf 'SUPABASE_URL=%s\nSUPABASE_KEY=%s\nGLM_API_KEY=%s\nFIN_PUSH_URL=%s\n' \
+            "$SUPA_URL" "$SUPA_KEY" "$GLM_KEY" "$FIN_PUSH" >> "$GITHUB_ENV"
         env:
           SUPA_URL: ${{ secrets.SUPABASE_URL }}
           SUPA_KEY: ${{ secrets.SUPABASE_KEY }}
           GLM_KEY: ${{ secrets.GLM_API_KEY }}
+          FIN_PUSH: ${{ secrets.FIN_PUSH_URL }}   # 可选：未配置时告警推送优雅跳过
 
       - name: 闸 0 —— 手机优先单写判定（exit 9=手机已跑，收工成功）
         id: gate

@@ -48,6 +48,44 @@
     validate_sim / test_sim 全绿；考古互证（2023-10-20 raw 3.583/3.582 逐位吻合）。
   - 纪律声明：sha 台账窗口今后**禁止再移动**（params.series.from 是绝对项），
     移动=MA 成熟点移位=重放失效（T-Fin27 audit 会报价差提醒）。
+- [x] T-Fin37（✅2026-10-27 完成，业主拍板）：daily_close 云端三连败（10-22/23/26）根因修复——
+  load_cfg 断链 + 闸0假接管
+  - 根因（run 40341024519 实证）：`cloud_gate.load_cfg()` 只读
+    `~/.finance_agent_cloud`/根 `.env` 两文件，不读 OS 环境变量 → GA runner 靠
+    GITHUB_ENV 注入的 SUPA secrets 成空 dict：闸0 `cloud_rows` 静默回空被
+    误判"手机缺席"假接管（init-db 回灌 0 行）；闸2 `--mobile` 判凭证缺失
+    exit 3 → workflow failure（1m22s，3 Annotations）。
+  - 修复：①load_cfg 增 OS 环境变量白名单兜底（文件优先，本地零变化）；
+    ②闸0 --cloud-runner 凭证缺失/探针失败时拒绝接管（exit 3+告警，宁失败
+    不幻写）；③daily_close.yml 增 FIN_PUSH_URL（可选）注入，告警可外发。
+  - 验证：新增沙演 `scripts/drill_gate_env.py`（假 PostgREST + HOME 覆写
+    模拟 GA 无凭证文件、纯 env 注入）5/5 全绿：无凭证闸0拒绝接管/云有今日
+    eod→SKIP/云无→接管放行/env凭证对账统一/mobile空凭证护栏；selftest 13 绿。
+- [x] T-Fin38（✅2026-10-27 完成，业主拍板）：回归沙盒隔离——测试永不污染真账
+  - 现象（T-Fin37 排查中实弹击落）：validate_sim V10c 对真实影子账本跑
+    `kill_switch.do_panic/do_release` → 每次回归往 `shadow_live.db events` 写
+    2 条假 PANIC（10-21/10-24 历史 8 条即历次回归残留）；V7c 因子审计与
+    engine 快照还写真实 factor_log/BIAS_LOG/factors.json。
+  - 修复：①V10c 用 `tempfile.TemporaryDirectory` 隔离 kill_switch 的
+    FLAG/DB/STATE 三路径（沙盒内建 events 表+空仓台账）；②validate_sim /
+    test_sim 顶部把 factor_mining 的 FACTOR_SNAPSHOT/FACTOR_LOG/BIAS_LOG
+    monkeypatch 到临时目录。
+  - 验证：回归前后真账指纹逐一比对——events 48 行不变、shadow_state/
+    factors.json/两 factor_log md5 全 OK、PANIC_LOCK.flag 无；validate_sim +
+    test_sim 全部通过 ✔。
+- [ ] T-Fin39（待大盘平稳的周末执行）：历史演练残留安全清理——
+  shadow_live.db `events` 表 10-21/10-24 共 8 条假 PANIC 事件（历次回归
+  V10c 写入；T-Fin38 沙盒隔离后不再新增）。**当前坚决不动**：动历史数据有
+  引发"对账指纹不一致（同键异值）"的风险。执行条件：周末非交易日 + 云端
+  无 in-progress workflow + 对账闸双源一致（--mobile --dry exit 0），清理后
+  立即 `--mobile --dry` 复检指纹不变才收工；清理脚本先在
+  drill_fake_supabase 沙演过再上真库。
+- [x] T-Fin36（✅2026-10-24 完成）：交易流水全景分析归档——按标的分组盈亏（518880
+  ¥203K > 159915 ¥187K > 513500 ¥130K > 510300 ¥6K）、年度（24年+14.84%/25年+28.98%/26年
+  +1.78%）与 36 月度拆解；交付 `reports/trade_flow_T-Fin36_2026-10-24.md` +
+  `reports/trades_full_2026-10-24.csv`（186 行流水含 pnl%/forced）。账本零写入、
+  零策略改动。关键风控读数：历史 MDD -9.73%（距 10% 熔断线 0.27pp），
+  当前自峰值回撤 -8.0%。
 - [~] T-Fin34（2026-10-24 实装完毕，待周一 16:40 首次自动运行验收）：云端为主线、本地对帐落库
   - 拍板：日常链以 GitHub Actions daily_close（北京 15:50）为单写者主跑；本地降级为
     ①git pull 云端状态回推 ②Supabase 对帐闸（pull 残缺）③云端缺日才本地灾备落库。
@@ -61,6 +99,8 @@
     ④run_daily_all.sh 初版重排——随后被 T-Fin35 业主新规重构覆盖（见下）。
   - 待验收（周一 2026-10-26）：云端 workflow 15:50 自动单写成功（eod/fills/repo 回推
     三落地），手机 16:40 走对账闸→幂等护栏分支、本地水位与云端齐平。
+- [~] T-Fin36（2026-10-24 业主令）：交易流水分析归档——按标的分组盈亏 + 月度/年度
+  收益拆解 + 流水导出（CSV/Markdown 至 reports/）。只读分析零写入账本，不动策略。
 - [x] T-Fin35（✅2026-10-24 完成，业主对账规则拍板）：信息全不全/对账/记账三段分离——闸先行统一状态
   - 拍板口径（四规则三问答）：①仅"信息不全"才停跑（数据完整性与对账**彻底分离**）；
     ②每次启动**第一件事=强制对账**（无论上轮是否对过）；③对账统一前绝不记账

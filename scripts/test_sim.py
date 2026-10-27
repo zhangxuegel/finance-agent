@@ -18,6 +18,15 @@ import portfolio
 import risk_control
 import strategy
 
+# T-Fin38：回归沙盒——测试触发的因子快照/日志写入只落临时目录，真实
+# data/factors.json、factor_log.jsonl、factor_bias_log.jsonl 零触碰。
+import tempfile as _sandbox_tf
+_SANDBOX = _sandbox_tf.mkdtemp(prefix="test_sim_sandbox_")
+import factor_mining as _sandbox_fm
+_sandbox_fm.FACTOR_SNAPSHOT = os.path.join(_SANDBOX, "factors.json")
+_sandbox_fm.FACTOR_LOG = os.path.join(_SANDBOX, "factor_log.jsonl")
+_sandbox_fm.BIAS_LOG = os.path.join(_SANDBOX, "factor_bias_log.jsonl")
+
 FAILS = []
 
 

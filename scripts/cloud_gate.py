@@ -42,8 +42,17 @@ DB = os.path.join(ROOT, "data", "shadow_live.db")
 CRED = os.path.expanduser("~/.finance_agent_cloud")
 
 
+ENV_FALLBACK_KEYS = ("SUPABASE_URL", "SUPABASE_KEY",
+                     "GLM_API_KEY", "FIN_PUSH_URL")
+
+
 def load_cfg() -> dict:
-    """密钥装配：~/.finance_agent_cloud → 项目根 .env（不回显）。"""
+    """密钥装配：~/.finance_agent_cloud → 项目根 .env → OS 环境变量（白名单兜底）。
+
+    T-Fin37：GA runner 上无凭证文件、workflow 用 GITHUB_ENV 注入 OS 环境变量
+    （daily_close.yml「注入密钥」步）。旧实现只读文件 → runner 恒空 dict →
+    闸0 cloud_rows 静默回空被误判"手机缺席"假接管 + 闸2 --mobile 判凭证缺失
+    exit 3（10-22/23/26 三连败根因）。文件优先、env 只兜底，本地行为零变化。"""
     cfg = {}
     for path in (CRED, os.path.join(ROOT, ".env")):
         if os.path.exists(path):
@@ -57,6 +66,10 @@ def load_cfg() -> dict:
                 k, v = k.strip(), v.strip().strip('"').strip("'")
                 if k and v:
                     cfg.setdefault(k, v)
+    for k in ENV_FALLBACK_KEYS:
+        v = os.environ.get(k)
+        if v:
+            cfg.setdefault(k, v)
     return cfg
 
 
@@ -649,7 +662,24 @@ def main() -> None:
         if today_arg.weekday() >= 5:
             print("[gate] 非交易日(周末) → 云端 runner 无操作（防幻影 eod 行）")
             sys.exit(9)
-        got = cloud_rows(load_cfg(), today, "sb_shadow_eod")
+        # T-Fin37：先验凭证与可达性——旧版拿不到凭证时 cloud_rows 静默回空，
+        # 被误判「手机缺席」假接管（init-db 回灌 0 行、闸2 必然 exit 3）。
+        # 宁可响亮失败，不做无凭证代跑（防双写/幻写）。
+        cfg = load_cfg()
+        if not (cfg.get("SUPABASE_URL") and cfg.get("SUPABASE_KEY")):
+            print("[error] 云端凭证缺失 → 闸0拒绝接管（无法判定手机先手，"
+                  "宁失败不幻写）；另一侧不受影响")
+            _alert("闸0（--cloud-runner）云端凭证缺失 → 拒绝接管代跑，"
+                   "宁失败不假接管", severity="ERROR")
+            sys.exit(3)
+        try:
+            cloud_alive(cfg)
+        except Exception as e:  # noqa: BLE001
+            print(f"[error] 云端只读探针失败 → 闸0拒绝接管；另一侧不受影响：{e}")
+            _alert(f"闸0（--cloud-runner）云端探针失败 → 拒绝接管：{e}",
+                   severity="ERROR")
+            sys.exit(3)
+        got = cloud_rows(cfg, today, "sb_shadow_eod")
         if got:
             print(f"[gate] 今日({today}) eod 已由手机落库 → 云端 runner 跳过")
             sys.exit(9)                # 9 = SKIP（workflow 按此判空跑）

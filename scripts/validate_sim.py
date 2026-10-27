@@ -22,6 +22,15 @@ import portfolio
 import push_notification as push
 import regime_filter as rf
 
+# T-Fin38：回归沙盒——测试的因子分/偏差审计只写临时目录，真实
+# data/factors.json、factor_log.jsonl、factor_bias_log.jsonl 零触碰。
+# （V10c 的 kill_switch 三路径在用例内单独隔离，见下。）
+import tempfile as _sandbox_tf
+_SANDBOX = _sandbox_tf.mkdtemp(prefix="validate_sim_sandbox_")
+factor_mining.FACTOR_SNAPSHOT = os.path.join(_SANDBOX, "factors.json")
+factor_mining.FACTOR_LOG = os.path.join(_SANDBOX, "factor_log.jsonl")
+factor_mining.BIAS_LOG = os.path.join(_SANDBOX, "factor_bias_log.jsonl")
+
 FAILS = []
 
 
@@ -254,14 +263,32 @@ except Exception as e:  # noqa: BLE001
     check("V10b 看板渲染", False, f"{type(e).__name__}: {e}")
 try:
     import kill_switch as _ks
-    was = _ks.flag_active()
-    _ks.do_panic("V10 验收演练")
-    locked = _ks.flag_active()
-    _ks.do_release()
-    unlocked = not _ks.flag_active()
-    check("V10c 物理开关全周期（panic→flag 落盘 → release→恢复）",
-          locked and unlocked and (was == unlocked or not was),
-          f"was={was}")
+    import tempfile as _tf
+    import sqlite3 as _sq
+    with _tf.TemporaryDirectory(prefix="v10c_sandbox_") as _td:
+        # T-Fin38：PANIC 全周期演练在沙盒进行——真实 shadow_live.db /
+        # shadow_state.json / PANIC_LOCK.flag 零触碰（回归一万次也不污染真账）
+        _ks.FLAG = os.path.join(_td, "PANIC_LOCK.flag")
+        _ks.DB = os.path.join(_td, "shadow_live.db")
+        _ks.STATE = os.path.join(_td, "shadow_state.json")
+        _c = _sq.connect(_ks.DB)
+        _c.execute("CREATE TABLE IF NOT EXISTS events"
+                   "(ts TEXT, kind TEXT, detail TEXT)")
+        _c.commit()
+        _c.close()
+        with open(_ks.STATE, "w", encoding="utf-8") as f:
+            json.dump({"sleeves": {"A": {"positions": {}, "trades": [],
+                                         "cash": 0.0},
+                                   "B": {"positions": {}, "trades": [],
+                                         "cash": 0.0}},
+                       "trades": [], "alarms": []}, f)
+        was = _ks.flag_active()
+        _ks.do_panic("V10 验收演练（沙盒）")
+        locked = _ks.flag_active()
+        _ks.do_release()
+        unlocked = not _ks.flag_active()
+    check("V10c 物理开关全周期（panic→flag 落盘 → release→恢复；沙盒隔离）",
+          locked and unlocked and not was, f"was={was}")
 except Exception as e:  # noqa: BLE001
     check("V10c 物理开关全周期", False, f"{type(e).__name__}: {e}")
 
