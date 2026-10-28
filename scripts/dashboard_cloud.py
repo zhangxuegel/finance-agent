@@ -62,9 +62,18 @@ TERMUX_FALLBACK = {
     "source": "Termux 本地模拟盘（main，MA 8/30，benchmark_filter:false，screener:封存）",
 }
 
-_GITHUB_RAW_URL = os.environ.get(
-    "GITHUB_RAW_URL",
-    "https://raw.githubusercontent.com/placeholder/placeholder/main/summary.json",
+# GitHub raw URL（云端 Streamlit Secrets / 环境变量 / 本地兜底三重优先）
+if st is not None:
+    try:
+        _SECRET_URL = st.secrets.get("GITHUB_RAW_URL", "")
+    except Exception:  # noqa: BLE001 —— secrets 未配置或缺该键
+        _SECRET_URL = ""
+else:
+    _SECRET_URL = ""
+_GITHUB_RAW_URL = (
+    _SECRET_URL
+    or os.environ.get("GITHUB_RAW_URL", "")
+    or "https://raw.githubusercontent.com/placeholder/placeholder/main/summary.json"
 )
 
 _LIGHT_CSS = """
