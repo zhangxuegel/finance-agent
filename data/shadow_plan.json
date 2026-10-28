@@ -1,11 +1,11 @@
 {
- "prev_date": "2026-10-23",
+ "prev_date": "2026-10-27",
  "light": "red",
  "gate_extras": {
-  "newest": 0.017288,
+  "newest": -0.0134,
   "worst5": -0.018638,
   "hi60": 4.801,
-  "latest": 4.178,
+  "latest": 4.123,
   "recovered": false
  },
  "defense": true,
@@ -30,10 +30,10 @@
    "518880": 1.0
   }
  },
- "prev_sig_e": 0.0,
+ "prev_sig_e": 1.0,
  "def_leg": {
   "code": "510880",
-  "signal": 0.0,
+  "signal": 1.0,
   "defensive": true,
   "note": "T-Fin28 防守豁免位：黄/红灯不清仓"
  },
@@ -47,18 +47,18 @@
  "race_pending": true,
  "target_weights": {
   "weight_a": 0.18,
-  "weight_b": 0.27,
+  "weight_b": 0.135,
   "c_buffer": 0.1
  },
- "trade_date": "2026-10-27",
+ "trade_date": "2026-10-28",
  "mode": {
-  "date": "2026-10-27",
+  "date": "2026-10-28",
   "mode": "live",
   "reason": "",
-  "ts": "2026-10-27 21:56:25"
+  "ts": "2026-10-28 22:33:18"
  },
  "engine_gate": {
-  "date": "2026-10-23",
+  "date": "2026-10-27",
   "defense": true,
   "light": "red",
   "crash_gate": true
