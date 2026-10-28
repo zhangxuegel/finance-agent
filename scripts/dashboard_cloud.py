@@ -116,20 +116,34 @@ def _pick(section, names: list[str]) -> str:
 
 
 def load_summary_from_github() -> dict | None:
-    """从 GitHub raw URL 拉取 summary.json（只读）。失败返回 None。"""
+    """从 GitHub raw URL 拉取 summary.json（只读）。失败返回 None。
+
+    为排查 Streamlit Cloud 环境下的读取失败，所有异常和非 200 响应
+    都会打印明确的错误日志（实际请求 URL、HTTP 状态码、异常信息）。
+    """
     url = _GITHUB_RAW_URL
     if "placeholder" in url:
+        print("[cloud] GITHUB_RAW_URL 未配置（st.secrets/os.environ 均为空），跳过拉取")
         return None
+    # 拼接时间戳参数，绕过 GitHub Raw CDN 缓存，强制获取最新版本
+    import time
+    sep = "&" if "?" in url else "?"
+    fetch_url = f"{url}{sep}t={int(time.time())}"
     try:
-        req = urllib.request.Request(url, headers={"User-Agent": "finance-agent-cloud/1.0"})
+        print(f"[cloud] 正在拉取 summary.json：{fetch_url}")
+        req = urllib.request.Request(fetch_url, headers={"User-Agent": "finance-agent-cloud/1.0"})
         with urllib.request.urlopen(req, timeout=10) as resp:
             if resp.status != 200:
+                print(f"[cloud] GitHub 返回非 200 状态码：{resp.status}（URL: {fetch_url}）")
                 return None
-            data = json.loads(resp.read().decode("utf-8"))
+            raw = resp.read().decode("utf-8")
+            data = json.loads(raw)
         if isinstance(data, dict):
+            print(f"[cloud] summary.json 拉取成功，nav={data.get('nav')}, date={data.get('trade_date')}")
             return data
-    except Exception:  # noqa: BLE001 —— 网络不可用或文件缺失
-        pass
+        print(f"[cloud] GitHub 返回数据不是 dict 类型（URL: {fetch_url}）")
+    except Exception as e:  # noqa: BLE001 —— 网络不可用或文件缺失
+        print(f"[cloud] 拉取 summary.json 失败：{type(e).__name__}: {e}（URL: {fetch_url}）")
     return None
 
 
