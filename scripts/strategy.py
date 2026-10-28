@@ -99,6 +99,11 @@ def signals_for(code: str, klines: list[dict], params: dict | None = None) -> li
 
     返回：[{"date", "signal"}]，与 klines 逐日对齐（0/1）。
     signal[i] 由第 i 日收盘生成 → portfolio 在第 i+1 日开盘撮合。
+
+    策略 A 大盘过滤：当 params["A"]["benchmark_filter"] 为 True 时，
+    只有当基准代码（benchmark_code）的收盘价高于其自身 MA（benchmark_ma）时，
+    才允许买入信号（signal=1）；否则强制空仓（signal=0）。卖出信号不受影响，
+    确保原有持仓能按策略逻辑止损或止盈。
     """
     params = params or load_params()["strategy"]
     engine = params["engine"]
@@ -110,6 +115,38 @@ def signals_for(code: str, klines: list[dict], params: dict | None = None) -> li
         raw = signal_series_b(closes, params["B"]["window"], params["B"]["n_std"])
     else:
         raise ValueError(f"未知策略引擎: {engine}（只支持 A/B）")
+
+    # ---- 策略 A 大盘过滤（仅拦截买入，卖出放行）----
+    if engine == "A" and params["A"].get("benchmark_filter", False):
+        bench_code = params["A"]["benchmark_code"]
+        bench_ma = params["A"]["benchmark_ma"]
+        try:
+            import fetch_data
+            bench_kl = fetch_data.load_raw_csv(bench_code, params)
+            bench_closes = [k["close"] for k in bench_kl]
+            bench_ma_series = sma_series(bench_closes, bench_ma)
+            # 基准日期与标的日期对齐：只处理共同交易日
+            bench_dates = [k["date"] for k in bench_kl]
+            bench_signal_map = {}
+            for i, d in enumerate(bench_dates):
+                if bench_ma_series[i] is not None:
+                    # 基准 close > 基准 MA → 大盘多头，允许买入；否则禁止买入
+                    bench_signal_map[d] = 1.0 if bench_closes[i] > bench_ma_series[i] else 0.0
+        except Exception:
+            # 基准数据不可用时，保守起见：禁止所有买入
+            bench_signal_map = {}
+
+        filtered = []
+        for k, s in zip(klines, raw):
+            d = k["date"]
+            bench_ok = bench_signal_map.get(d, 0.0)
+            if s > 0 and bench_ok <= 0:
+                # 原始买入信号但大盘不过滤：强制空仓
+                filtered.append(0.0)
+            else:
+                # 卖出信号（s==0）或大盘允许买入：放行
+                filtered.append(s)
+        raw = filtered
 
     return [{"date": k["date"], "signal": s} for k, s in zip(klines, raw)]
 

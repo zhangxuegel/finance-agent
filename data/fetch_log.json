@@ -698,5 +698,86 @@
         "path": "/home/runner/work/finance-agent/finance-agent/data/510880.csv"
       }
     ]
+  },
+  {
+    "at": "2026-10-28T22:24:37",
+    "items": [
+      {
+        "code": "510300",
+        "name": "沪深300ETF",
+        "secid": "1.510300",
+        "kind": "etf",
+        "rows": 732,
+        "first": "2023-10-20",
+        "last": "2026-10-28",
+        "coverage": "99.5%",
+        "max_gap_checked": 12,
+        "path": "/data/data/com.termux/files/home/finance-agent/data/510300.csv"
+      },
+      {
+        "code": "159915",
+        "name": "创业板ETF",
+        "secid": "0.159915",
+        "kind": "etf",
+        "rows": 732,
+        "first": "2023-10-20",
+        "last": "2026-10-28",
+        "coverage": "99.5%",
+        "max_gap_checked": 12,
+        "path": "/data/data/com.termux/files/home/finance-agent/data/159915.csv"
+      },
+      {
+        "code": "513500",
+        "name": "标普500ETF(QDII)",
+        "secid": "1.513500",
+        "kind": "etf",
+        "rows": 732,
+        "first": "2023-10-20",
+        "last": "2026-10-28",
+        "coverage": "99.5%",
+        "max_gap_checked": 12,
+        "path": "/data/data/com.termux/files/home/finance-agent/data/513500.csv"
+      },
+      {
+        "code": "518880",
+        "name": "黄金ETF",
+        "secid": "1.518880",
+        "kind": "etf",
+        "safe_haven": true,
+        "rows": 732,
+        "first": "2023-10-20",
+        "last": "2026-10-28",
+        "coverage": "99.5%",
+        "max_gap_checked": 12,
+        "path": "/data/data/com.termux/files/home/finance-agent/data/518880.csv"
+      },
+      {
+        "code": "511990",
+        "name": "银华日利(货币ETF)",
+        "secid": "1.511990",
+        "kind": "etf",
+        "exclude_core": true,
+        "rows": 732,
+        "first": "2023-10-20",
+        "last": "2026-10-28",
+        "coverage": "99.5%",
+        "max_gap_checked": 12,
+        "path": "/data/data/com.termux/files/home/finance-agent/data/511990.csv"
+      },
+      {
+        "code": "510880",
+        "name": "上证红利ETF(华泰柏瑞)",
+        "secid": "1.510880",
+        "kind": "etf",
+        "exclude_core": true,
+        "defensive": true,
+        "rows": 732,
+        "first": "2023-10-20",
+        "last": "2026-10-28",
+        "coverage": "99.5%",
+        "max_gap_checked": 12,
+        "path": "/data/data/com.termux/files/home/finance-agent/data/510880.csv"
+      }
+    ]
   }
 ]

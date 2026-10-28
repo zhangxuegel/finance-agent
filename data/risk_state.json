@@ -1,5 +1,20 @@
 {
   "locked": false,
-  "lock_until_day": 0,
-  "alarm_days": []
+  "lock_until_day": 559,
+  "alarm_days": [
+    {
+      "date": "2024-10-09",
+      "day_index": 233,
+      "reason": "单日亏损 -8.01% > 3% 阈值",
+      "at": "2026-10-28T22:17:23"
+    },
+    {
+      "date": "2026-02-02",
+      "day_index": 556,
+      "reason": "单日亏损 -3.45% > 3% 阈值",
+      "at": "2026-10-28T22:17:26"
+    }
+  ],
+  "lock_reason": "单日亏损 -3.45% > 3% 阈值",
+  "lock_from": "2026-02-02"
 }

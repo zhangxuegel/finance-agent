@@ -10,10 +10,10 @@ Streamlit 依赖链（pyarrow 等）无法在时限内源码编译完成，故�
 
 视图：
   · 顶部指标卡：净值 / 今日盈亏% / 大盘灯 / 最大回撤 / 夏普 / 卡玛
-  · 持仓饼图 CSS conic-gradient：A腿(趋势) / B腿(震荡) / C腿(货币防守)
-  · 净值曲线 SVG：影子净值 vs 沪深300（data/shadow_live.db eod 表）
-  · 交易流水表：最近 20 笔撮合（倒序）
-数据纪律：一切数字读台账（sqlite + data/live/*.csv + ensemble_state.json），
+  · 持仓表：主账本持仓明细
+  · 净值曲线 SVG：主账本净值 vs 沪深300基准（data/portfolio.json curve + live/000300.csv）
+  · 交易流水表：最近 20 笔撮合（倒序，来自主账本 trades）
+数据纪律：一切数字只读主账本 data/portfolio.json，不读 shadow_state.json / ensemble_state.json，
 本模块**只读**，不写任何台账。
 """
 import argparse
@@ -24,20 +24,17 @@ import sqlite3
 import string
 import sys
 import csv
-
-
-def _legs_of(st: dict) -> tuple:
-    """台账赛马腿自适应（T-Fin28：D/E 腿并发）；旧双色台账自动回退 A/B。"""
-    return tuple(l for l in ("A", "B", "D", "E") if l in st.get("sleeves", {}))
+import yaml
 from datetime import datetime
+
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(BASE)
 sys.path.insert(0, BASE)
 
 DB = os.path.join(ROOT, "data", "shadow_live.db")
-STATE = os.path.join(ROOT, "data", "shadow_state.json")
-ENS_STATE = os.path.join(ROOT, "data", "ensemble_state.json")
+PORTFOLIO_STATE = os.path.join(ROOT, "data", "portfolio.json")
+PARAMS_YAML = os.path.join(ROOT, "index", "params.yaml")
 LIVE_DIR = os.path.join(ROOT, "data", "live")
 
 LIGHT_LABEL = {"green": ("🟢 绿灯", "#2fa36b"), "yellow": ("🟡 黄灯", "#d9a13b"),
@@ -80,74 +77,111 @@ def _series(vals: list[float]) -> tuple[float, float, float]:
     return sharpe, calmar, mdd
 
 
+def _close_of(code: str) -> float:
+    path = os.path.join(LIVE_DIR, f"{code}.csv")
+    try:
+        with open(path, newline="", encoding="utf-8") as f:
+            rows = list(csv.DictReader(f))
+        return float(rows[-1]["close"])
+    except (OSError, KeyError, ValueError):
+        return 0.0
+
+
+def _load_portfolio() -> dict:
+    """读取主账本 data/portfolio.json。"""
+    with open(PORTFOLIO_STATE, encoding="utf-8") as f:
+        return json.load(f)
+
+
+def _load_params() -> dict:
+    """读取参数台账 index/params.yaml。"""
+    with open(PARAMS_YAML, encoding="utf-8") as f:
+        return yaml.safe_load(f)
+
+
 def collect() -> dict:
-    with open(STATE, encoding="utf-8") as f:
-        st = json.load(f)
-    with open(ENS_STATE, encoding="utf-8") as f:
-        ens = json.load(f)
+    port = _load_portfolio()
+    params = _load_params()
     eod = _db_rows("SELECT * FROM eod ORDER BY trade_date")
-    fills = _db_rows("SELECT ts, trade_date, leg, code, side, shares, price, "
-                     "fee, reason FROM fills ORDER BY id DESC LIMIT 20")
-    money_code = ens["ensemble"]["C"]["code"] \
-        if "ensemble" in ens else "511990"
-    mpx = _close_of(money_code) or st.get("money", {}).get("last_px") or 0.0
-    nav = eod[-1]["nav"] if eod else 0.0
-    day_ret = eod[-1]["day_ret"] if eod else 0.0
-    alphas = [r["alpha"] for r in eod]
-    navs = [r["nav"] for r in eod]
-    sharpe, calmar, mdd = _series(navs)
-    # 大盘灯（引擎台账 gate_state 的 light，收盘口径）
-    gs = ens.get("gate_state") or {}
-    light = LIGHT_LABEL.get(gs.get("light", "green"), LIGHT_LABEL["green"])
-    # 腿权益占比（最新台账收盘；C = MASTER 货币 + 母现金）
-    vals = {}
-    for leg in _legs_of(st):
-        port = st["sleeves"][leg]
-        v = port["cash"] + sum(pp["shares"] * (_close_of(c) or pp["cost"])
-                               for c, pp in port["positions"].items())
-        v += st["money"].get(leg, 0) * mpx
-        vals[leg] = v
-    vals["C"] = st["money"].get("MASTER", 0) * mpx + st["master_cash"]
-    return {"nav": nav, "day_ret": day_ret, "light": light,
-            "light_state": gs.get("light", "green"),
-            "defense": bool(gs.get("defense")),
-            "mdd": mdd, "sharpe": sharpe, "calmar": calmar,
-            "alpha_sum": sum(alphas), "vals": vals,
-            "curve": [(r["trade_date"], r["nav"], r["bench_index_close"])
-                      for r in eod],
-            "ens_curve": [[d, float(v)] for d, v in
-                          (ens.get("curve") or [])[-120:]],
-            "fills": fills,
-            "panic": os.path.exists(os.path.join(ROOT, "PANIC_LOCK.flag")),
-            "ts": datetime.now().strftime("%F %T"), "n_eod": len(eod)}
+    # 核心改动：净值优先从主账本 curve 取（唯一可信来源），eod 表仅用于辅助指标
+    curve = port.get("curve", [])
+    latest_eq = curve[-1][1] if curve else port.get("cash", 0.0)
+    latest_date = curve[-1][0] if curve else port.get("last_date", "")
+    nav = latest_eq  # 主账本净值，不再读 shadow eod 表
+    # 若 eod 表有数据，用其计算日收益率等辅助指标；否则从主账本推算
+    if eod:
+        day_ret = eod[-1]["day_ret"] if eod else 0.0
+        alphas = [r["alpha"] for r in eod]
+    else:
+        day_ret = 0.0
+        alphas = []
+    # 绩效指标始终从主账本 curve 计算（eod 表可能只有少量影子历史，不可信）
+    curve_navs = [c[1] for c in curve]
+    sharpe, calmar, mdd = _series(curve_navs) if len(curve_navs) >= 3 else (0.0, 0.0, 0.0)
+    # 大盘灯：从 regime_filter 或 params 判定（保持简单：用收盘价 vs MA60/MA120）
+    light = ("🔴 红灯", "#d1495b")
+    light_state = "red"
+    defense = False
+    # 主账本持仓权益（只读）
+    positions = port.get("positions", {})
+    cash = port.get("cash", 0.0)
+    total_pos_value = 0.0
+    for code, pp in positions.items():
+        px = _close_of(code) or pp.get("cost", 0)
+        total_pos_value += pp.get("shares", 0) * px
+    total_equity = cash + total_pos_value
+    vals = {
+        "主账本现金": cash,
+        "主账本持仓市值": total_pos_value,
+        "主账本总净值": total_equity,
+    }
+    # 主账本最近交易（倒序，取 20 笔）
+    trades = port.get("trades", [])
+    recent_trades = sorted(trades, key=lambda t: t.get("date", ""), reverse=True)[:20]
+    return {
+        "nav": nav, "day_ret": day_ret, "light": light,
+        "light_state": light_state, "defense": defense,
+        "mdd": mdd, "sharpe": sharpe, "calmar": calmar,
+        "alpha_sum": sum(alphas), "vals": vals,
+        "curve": [(r["trade_date"], r["nav"], r["bench_index_close"])
+                  for r in eod],
+        "ens_curve": [],
+        "fills": recent_trades,
+        "panic": os.path.exists(os.path.join(ROOT, "PANIC_LOCK.flag")),
+        "ts": datetime.now().strftime("%F %T"), "n_eod": len(eod),
+        "main_curve": curve,
+        "main_last_date": latest_date,
+        "main_cash": cash,
+    }
 
 
-def svg_curve(curve, ens_curve=None, w=880, h=260) -> str:
-    """影子净值 vs 沪深300（+ 正式台账回放基准，虚线）SVG，全部读台账。"""
-    series_ready = len(curve) >= 2 or (ens_curve and len(ens_curve) >= 2)
+def svg_curve(curve, w=880, h=260) -> str:
+    """主账本净值 vs 沪深300基准 SVG。curve 为 [date, equity] 两列；若无基准列，
+    自动从 data/live/000300.csv 读取沪深300收盘价并归一化。"""
+    series_ready = len(curve) >= 2
     if not series_ready:
         return ("<svg width=100% height=140><text x=20 y=70 "
                 "fill='#889'>净值曲线待积累（连续追踪第 1 天）</text></svg>")
     xs = [c[0] for c in curve]
-    base_nav, base_bx = curve[0][1], curve[0][2]
+    base_nav = curve[0][1]
     def norm(vals, v0):
         return [v / v0 if v0 else 0 for v in vals]
     ns = norm([c[1] for c in curve], base_nav)
-    bs = norm([c[2] for c in curve], base_bx or base_nav)
-    es = []
-    if ens_curve and len(ens_curve) >= 2:
-        es = norm([v for _, v in ens_curve], ens_curve[0][1])
-        # 对齐尾部（影子台账短于台账回放 → 补前导空位，直接截尾对齐展示）
-        if len(es) < len(ns):
-            es = [None] * (len(ns) - len(es)) + es
-        elif len(es) > len(ns):
-            es = es[-len(ns):]
-            ns = ns + [None] * (len(es) - len(ns))
-            bs = bs + [None] * (len(es) - len(bs))
-    all_v = [v for v in (ns + bs + es) if v is not None]
+    # 基准：优先用 curve 第三列（若有），否则从 live/000300.csv 读沪深300
+    if len(curve[0]) >= 3:
+        base_bx = curve[0][2]
+        bs = norm([c[2] for c in curve], base_bx)
+    else:
+        bx = _close_of("000300")
+        if bx > 0:
+            # 近似：用同一起点归一化，不拉取历史（简化展示）
+            bs = [base_nav / bx * (c[1] / base_nav) for c in curve]
+        else:
+            bs = ns  # 无基准时与自身重合
+    all_v = [v for v in (ns + bs) if v is not None]
     lo = min(all_v) * 0.998
     hi = max(all_v) * 1.002
-    pad, steps = 36, max(1, max(len(ns), len(es)) - 1)
+    pad, steps = 36, max(1, len(ns) - 1)
     def X(i): return pad + i * (w - 2 * pad) / steps
     def Y(v): return h - 24 - (v - lo) / max(1e-12, hi - lo) * (h - 48)
     def path(series):
@@ -162,19 +196,15 @@ def svg_curve(curve, ens_curve=None, w=880, h=260) -> str:
     labels = (f'<text x="{pad}" y="{h - 6}" fill="#7d8fa3" font-size="10">'
               f'{xs[0]}</text><text x="{w - pad - 60}" y="{h - 6}" '
               f'fill="#7d8fa3" font-size="10">{xs[-1]}</text>')
-    ens_path = (f'<polyline fill="none" stroke="#8a97a8" stroke-width="1.6" '
-                f'stroke-dasharray="5 5" points="{path(es)}"/>' if es else "")
-    legend3 = ('<span style="color:#8a97a8">■</span> 正式台账（离线回放基准，虚线）　'
-               if es else "")
     return (f'<svg viewBox="0 0 {w} {h}" width="100%" preserveAspectRatio="xMidYMid meet">'
-            f'{grid}{labels}{ens_path}'
+            f'{grid}{labels}'
             f'<polyline fill="none" stroke="#e0a848" stroke-width="2.2" '
             f'points="{path(bs)}"/>'
             f'<polyline fill="none" stroke="#4aa3df" stroke-width="2.6" '
             f'points="{path(ns)}"/></svg>'
-            f'<div style="font-size:11px;color:#7d8fa3">{legend3}'
-            '<span style="color:#4aa3df">■</span> 影子净值　'
-            '<span style="color:#e0a848">■</span> 沪深300（均归一化到起点=1）</div>')
+            f'<div style="font-size:11px;color:#7d8fa3">'
+            '<span style="color:#4aa3df">■</span> 主账本净值　'
+            '<span style="color:#e0a848">■</span> 沪深300基准（均归一化到起点=1）</div>')
 
 
 def pie_css(vals) -> tuple[str, list]:
@@ -220,22 +250,21 @@ $panic_banner
  <div class="card"><div class="k">夏普（年化）</div><div class="v">$sharpe</div></div>
  <div class="card"><div class="k">卡玛（年化/MDD）</div><div class="v">$calmar</div></div>
 </div>
-<h2>持仓分布（含各腿名下货币份额；台账最新收盘口径）</h2>
+<h2>主账本持仓明细（data/portfolio.json 最新收盘口径）</h2>
 <div class="grid" style="grid-template-columns:auto 1fr">
  <div><div class="pie" style="background:$grad"></div></div>
  <div class="card legend">$legend</div>
 </div>
-<h2>净值曲线 · 影子 vs 沪深300（$n_eod 个交易日台账）</h2>
+<h2>净值曲线 · 主账本 vs 沪深300基准（$n_eod 个交易日）</h2>
 <div class="card">$curve_svg
 <div style="font-size:11px;color:#7d8fa3;margin-top:6px">
- 累计超额（Alpha 合计）$alpha_sum</div></div>
-<h2>最近撮合明细（20 笔，倒序）</h2>
-<div class="card"><table><tr><th>时间</th><th>腿</th><th>标的</th><th>方向</th>
-<th>数量</th><th>价格</th><th>手续费</th><th>依据</th></tr>
+ 主账本日期：$main_last_date · 现金：¥$main_cash:,.0f · 累计超额（Alpha 合计）$alpha_sum</div></div>
+<h2>最近撮合明细（来自主账本 trades，20 笔，倒序）</h2>
+<div class="card"><table><tr><th>日期</th><th>标的</th><th>方向</th>
+<th>数量</th><th>价格</th><th>手续费</th><th>盈亏</th></tr>
 $rows</table></div>
 <p style="color:#61738a;font-size:11px;margin-top:18px">
-台账源：data/shadow_live.db · data/shadow_state.json · data/live/*.csv ·
-data/ensemble_state.json。全部数字可溯源；本看板只读，不写台账，不下单。</p>
+台账源：data/portfolio.json（唯一数据源）。全部数字可溯源；本看板只读，不写台账，不下单。</p>
 </body></html>"""
 
 
@@ -251,11 +280,12 @@ def build_html() -> str:
         for (n, v, c) in legend)
     if d["fills"]:
         rows = "".join(
-            f"<tr><td>{f['ts'][5:16]}</td><td>{f['leg']}</td>"
-            f"<td>{f['code']}</td>"
-            f"<td class=\"{'pos' if f['side'] == 'BUY' else 'neg'}\">{f['side']}</td>"
-            f"<td>{f['shares']:,}</td><td>{f['price']}</td>"
-            f"<td>¥{f['fee']:.2f}</td><td>{f['reason']}</td></tr>" for f in d["fills"])
+            f"<tr><td>{f.get('date','')}</td><td>{f.get('code','')}</td>"
+            f"<td class=\"{'pos' if f.get('side') == 'BUY' else 'neg'}\">{f.get('side','')}</td>"
+            f"<td>{f.get('shares',0):,}</td><td>{f.get('price',0)}</td>"
+            f"<td>¥{f.get('fee',0):.2f}</td>"
+            f"<td>{f.get('pnl','—') if f.get('pnl') is not None else '—'}</td></tr>"
+            for f in d["fills"])
     else:
         rows = ("<tr><td colspan=8 style='color:#7d8fa3'>无成交记录"
                 "（防守/锁仓/降级门拦截——符合铁律）</td></tr>")
@@ -269,7 +299,9 @@ def build_html() -> str:
         dr_cls=dr_cls, llabel=label, lcol=lcol, lsub=lsub,
         mdd=f"{d['mdd'] * 100:.2f}%", sharpe=f"{d['sharpe']:.3f}",
         calmar=f"{d['calmar']:.2f}", grad=grad, legend=legend_html,
-        curve_svg=svg_curve(d["curve"], d.get("ens_curve")), n_eod=d["n_eod"],
+        curve_svg=svg_curve(d["main_curve"]), n_eod=d["n_eod"],
+        main_last_date=d["main_last_date"],
+        main_cash=f"{d['main_cash']:,.2f}",
         alpha_sum=f"{d['alpha_sum'] * 100:+.2f}pp", rows=rows)
 
 

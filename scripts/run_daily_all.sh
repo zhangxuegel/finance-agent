@@ -15,6 +15,14 @@
 # 台账：index/params.yaml → cron.schedule(本地 16:40) / 云端 workflow(15:50)
 set -u
 cd "$HOME/finance-agent" || exit 1
+
+# 加载环境变量（GLM_API_KEY 等敏感信息存于项目根目录 .env，不入 git）
+if [ -f ".env" ]; then
+  set -a
+  . ./.env
+  set +a
+fi
+
 echo "== run_daily_all $(date '+%F %T') =="
 LOG_TAG="[run daily]"
 
@@ -41,43 +49,30 @@ case "$gate_rc" in
      exit 3 ;;
 esac
 
-# 记账幂等护栏说明：fetch 先行把行情推到最新，再用「台账/影子 eod 水位
+# 记账幂等护栏说明：fetch 先行把行情推到最新，再用「台账 portfolio last_date
 # 是否到达行情最新交易日」判定记账是否已完成（云端回推/先前已跑一致时跳过，
 # 防双写）。
 
-# 2) 记账/推进（仅对账统一后可达）
+# 记账/推进（仅对账统一后可达）
 python3 scripts/fetch_data.py || exit 1
-read -r PORT_LAST SHADOW_MAX LATEST <<EOF
+read -r PORT_LAST LATEST <<EOF
 $(python3 - <<'PY'
-import csv, json, os, sqlite3
+import csv, json, os
 with open("data/510300.csv", newline="", encoding="utf-8") as f:
     rows = list(csv.DictReader(f))
 latest = rows[-1]["date"] if rows else ""
 port = json.load(open("data/portfolio.json", encoding="utf-8"))
-try:
-    with sqlite3.connect("data/shadow_live.db") as c:
-        shadow = c.execute("SELECT MAX(trade_date) FROM eod").fetchone()[0] or ""
-except Exception:
-    shadow = ""
-print(port.get("last_date") or "", shadow, latest)
+print(port.get("last_date") or "", latest)
 PY
 )
 EOF
-echo "$LOG_TAG 台账水位：portfolio=$PORT_LAST / 影子eod=$SHADOW_MAX / 行情最新=$LATEST"
+echo "$LOG_TAG 台账水位：portfolio=$PORT_LAST / 行情最新=$LATEST"
 TF=${FIN_FAKE_TF:-$(date +%u)}   # 1=Mon ... 6=Sat, 7=Sun（FIN_FAKE_TF 仅沙盒演练用）
 
 if [ "$TF" -le 5 ]; then
-  if [ "$SHADOW_MAX" \< "$LATEST" ]; then
-    echo "$LOG_TAG 影子账未推进 → 收盘补撮合/落库（--replay，真实 open 口径）"
-    python3 scripts/shadow_broker.py --match  --replay || echo "$LOG_TAG [warn] 影子撮合异常"
-    python3 scripts/shadow_broker.py --ledger --replay || echo "$LOG_TAG [warn] 影子落库异常"
-    python3 scripts/shadow_broker.py --review --replay || echo "$LOG_TAG [warn] 推送可降级"
-  fi
   if [ "$PORT_LAST" \< "$LATEST" ] || [ -z "$PORT_LAST" ]; then
-    echo "$LOG_TAG 核心账本未推进 → daily_report + ensemble"
+    echo "$LOG_TAG 核心账本未推进 → daily_report（主策略单流）"
     python3 scripts/daily_report.py    || exit 2
-    python3 scripts/ensemble_engine.py --daily --replay 20 || exit 3
-    python3 scripts/push_notification.py --push-auto || echo "$LOG_TAG [warn] webhook 未配置"
   else
     echo "$LOG_TAG 记账已完成（云端回推/先前已跑）→ 幂等跳过，不双写"
   fi

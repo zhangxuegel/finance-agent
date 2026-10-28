@@ -1,35 +1,31 @@
 # -*- coding: utf-8 -*-
 """dashboard_cloud.py —— 云端原生 Streamlit 看板（T-Fin12 手机竖屏重构）
 
-**云端环境专用**：数据源不读本地 SQLite——一切从云端 Supabase 拉取（只读）。
-本脚本被 Streamlit Cloud 运行（requirements.txt 见仓库根目录）；
-本地仅作开发/自检（streamlit lazy-import，导入无害）。
+**云端环境专用**：数据源不再读取本地 data/*.json —— 统一从 GitHub 根目录
+的 summary.json 拉取（由本地 Termux 侧通过 sync_to_cloud.py / git push 增量推送）。
+若网络不可用或 summary.json 缺失，回退显示本地 Termux 运行状态的硬编码兜底值。
 
 配置来源（三重兜底，同 README_DEPLOY.md）：
-  1) Streamlit Cloud: .streamlit/secrets.toml 的 [supabase] url/key
-  2) 环境变量 SUPABASE_URL / SUPABASE_KEY
-  3) 环境变量 SUPABASE_TABLES（可选表前缀，默认 sb_）
+  1) Streamlit Cloud: .streamlit/secrets.toml 的 [supabase] url/key（保留兼容，已废弃）
+  2) 环境变量 SUPABASE_URL / SUPABASE_KEY（保留兼容，已废弃）
+  3) 环境变量 GITHUB_RAW_URL（可选，默认 https://raw.githubusercontent.com/<user>/<repo>/main/summary.json）
 
 T-Fin12 竖屏三视图（顶层三卡：
   · 当前净值  · 今日盈亏（含昨日差）  · 红绿灯状态）：
   · 红绿灯判定（纯函数，来自云端 eod 行 defense/lock_remaining/day_ret）：
       锁仓剩余>0 → 🔴 熔断锁仓；防守=1 → 🟡 防守日；
       当日 ≤-2% → 🟠 急跌预警；其余 → 🟢 正常。
-  · 净值折线图：影子 vs 沪深300（归一化=1，独立起始锚）
+  · 净值折线图：主账本 vs 沪深300（归一化=1，独立起始锚）
   · 最近交易流水表：按 id 倒序 40 笔（涨停拒买单独标旗）
 
-T-Fin22 顶部遮挡修复：
-  · set_page_config 加 initial_sidebar_state="collapsed"（compact 模式）；
-  · CSS 隐藏默认顶部工具栏（header/toolbar/decoration/status），
-    杜绝 Share/编辑栏压住顶部指标卡；
-  · 主内容渲染前加 50px 顶部留白，三卡完整可见。
-
 铁律映射：只读（云端拉取→展示，绝不写库）；一切数字来自 synced 台账行；
-无任何 LLM/人工订单注水——净值/流水全部由本地确定性引擎产出后增量推送。
+无任何 LLM/人工订单注水——净值/流水全部由本地确定性引擎产出后推送到 GitHub。
 """
 import os
 import sys
 import math
+import json
+import urllib.request
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(BASE)
@@ -48,6 +44,28 @@ except ImportError:  # noqa: BLE001
 
 # 竖屏首行初始净值兜底（云端行 nav_prev 缺失且只有 1 行时用）
 INITIAL_NAV = 1_000_000.0
+
+# Termux 本地运行状态兜底值（由 scripts/daily_report.py 生成后同步到 GitHub）
+TERMUX_FALLBACK = {
+    "nav": 1593578.29,
+    "cum": 0.5936,
+    "pnl": 0.0,
+    "day_ret": 0.0,
+    "mdd": 0.0933,
+    "sharpe": 1.225,
+    "alpha_sum": 0.0,
+    "days": 702,
+    "trade_date": "2026-10-28",
+    "positions": {},
+    "cash": 1593578.29,
+    "status": "空仓",
+    "source": "Termux 本地模拟盘（main，MA 8/30，benchmark_filter:false，screener:封存）",
+}
+
+_GITHUB_RAW_URL = os.environ.get(
+    "GITHUB_RAW_URL",
+    "https://raw.githubusercontent.com/placeholder/placeholder/main/summary.json",
+)
 
 _LIGHT_CSS = """
 <style>
@@ -77,8 +95,7 @@ div[data-testid="stMarkdownContainer"] .fa-badge {
 
 
 def _pick(section, names: list[str]) -> str:
-    """纯函数：从 dict/映射里按候选名取第一个非空字符串（大小写兼容）。
-    兼容 st.secrets["supabase"] 为 Mapping 或 dict-get 可用的情况。"""
+    """纯函数：从 dict/映射里按候选名取第一个非空字符串（大小写兼容）。"""
     for n in names:
         try:
             v = section.get(n, "")
@@ -89,55 +106,22 @@ def _pick(section, names: list[str]) -> str:
     return ""
 
 
-_URL_NAMES = ["url", "supabase_url", "SUPABASE_URL"]
-_KEY_NAMES = ["key", "supabase_key", "SUPABASE_KEY"]
-
-
-def config_from_env() -> tuple[str, str, str]:
-    """(url, key, prefix)。读取优先级（T-Fin14 兼容矩阵）：
-      1) st.secrets["supabase"] 下 url/supabase_url/SUPABASE_URL（+key 同理）
-      2) st.secrets 顶层同上候选名（有人把配置平铺写在表外）
-      3) os.environ SUPABASE_URL / SUPABASE_KEY
-    secrets.toml → 环境变量 双兜底。"""
-    url = key = ""
-    if st is not None:
-        for src in ("supabase", None):
-            try:
-                sec = st.secrets[src] if src else dict(st.secrets)
-            except Exception:  # noqa: BLE001 —— secrets 缺该表/整表缺
-                continue
-            url = _pick(sec, _URL_NAMES)
-            key = _pick(sec, _KEY_NAMES)
-            if url or key:
-                break
-    url = (url or os.environ.get("SUPABASE_URL", "")).rstrip("/")
-    key = key or os.environ.get("SUPABASE_KEY", "")
-    prefix = os.environ.get("SUPABASE_TABLES", "sb_")
-    return url, key, prefix
-
-
-def _session(url: str, key: str):
-    import requests
-    s = requests.Session()
-    s.headers.update({"apikey": key, "Authorization": f"Bearer {key}",
-                      "User-Agent": "finance-agent-cloud-dashboard/1.2"})
-    return s, url
-
-
-def fetch_rows(table: str, url: str, key: str, limit: int = 2000,
-               order: str = "trade_date.asc") -> list[dict]:
-    """云端只读拉取：order 用 supabase 语法（如 id.desc）。"""
-    s, base = _session(url, key)
-    import requests
-    r = s.get(f"{base}/rest/v1/{table}",
-              params={"select": "*", "order": order, "limit": str(limit)},
-              timeout=(5, 20))
-    if r.status_code != 200:
-        raise RuntimeError(f"云端读取 {table} 失败 HTTP {r.status_code}")
-    rows = r.json()
-    if not isinstance(rows, list):
-        raise RuntimeError(f"云端 {table} 返回异常类型（非 JSON 数组）")
-    return rows
+def load_summary_from_github() -> dict | None:
+    """从 GitHub raw URL 拉取 summary.json（只读）。失败返回 None。"""
+    url = _GITHUB_RAW_URL
+    if "placeholder" in url:
+        return None
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "finance-agent-cloud/1.0"})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            if resp.status != 200:
+                return None
+            data = json.loads(resp.read().decode("utf-8"))
+        if isinstance(data, dict):
+            return data
+    except Exception:  # noqa: BLE001 —— 网络不可用或文件缺失
+        pass
+    return None
 
 
 def compute_metrics(eod: list[dict]) -> dict:
@@ -242,121 +226,105 @@ def _badge(light: dict):
                 f"</div>", unsafe_allow_html=True)
 
 
-def _refresh_button():
-    if st.button("🔄 刷新云端数据", type="secondary"):
-        st.cache_data.clear()
-        st.rerun()
-
-
 def run_app():
     """Streamlit 页面主体（云端入口，竖屏优先）。"""
-    st.set_page_config(page_title="影子实盘云端看板",
-                       page_icon="🛰️", layout="centered",
+    st.set_page_config(page_title="T-Fin01 模拟盘看板",
+                       page_icon="📊", layout="centered",
                        initial_sidebar_state="collapsed")
     st.markdown(_LIGHT_CSS, unsafe_allow_html=True)
     # —— T-Fin22：主内容渲染前顶部留白 50px，指标卡不被任何顶栏遮挡 ——
     st.markdown("<div style='margin-top: 50px;'></div>",
                 unsafe_allow_html=True)
-    url, key, prefix = config_from_env()
-    if not url or not key:
-        st.error("未配置云端数据库（secrets.toml 或环境变量 SUPABASE_URL/"
-                 "SUPABASE_KEY）——见主仓库 README_DEPLOY.md 第 2 步。")
-        st.stop()
-    try:
-        eod = _cached_fetch(url, key, f"{prefix}shadow_eod",
-                            "trade_date.asc", 2000)
-        fills = _cached_fetch(url, key, f"{prefix}shadow_fills",
-                              "id.desc", 60)
-    except Exception as e:  # noqa: BLE001 —— 云端故障给用户可读指引
-        st.error(f"云端读取失败：{e}")
-        _refresh_button()
-        st.stop()
-    if not eod:
-        st.info("云端台账为空：本地跑一次 `python3 scripts/sync_to_cloud.py` "
-                "后刷新。看板只读，不落任何数字。")
-        st.stop()
-    last = max(eod, key=lambda r: r.get("trade_date") or "")
-    light = light_state(last)
-    m = compute_metrics(eod)
+
+    # 优先从 GitHub raw URL 拉取 summary.json；失败则回退 Termux 兜底值
+    summary = load_summary_from_github()
+    if summary is None:
+        st.warning("⚠️ 云端 summary.json 暂不可用，显示 Termux 本地运行状态（兜底值）")
+        summary = TERMUX_FALLBACK
+
+    nav = float(summary.get("nav", TERMUX_FALLBACK["nav"]))
+    cum = float(summary.get("cum", TERMUX_FALLBACK["cum"]))
+    pnl = float(summary.get("pnl", TERMUX_FALLBACK["pnl"]))
+    day_ret = float(summary.get("day_ret", TERMUX_FALLBACK["day_ret"]))
+    mdd = float(summary.get("mdd", TERMUX_FALLBACK["mdd"]))
+    sharpe = float(summary.get("sharpe", TERMUX_FALLBACK["sharpe"]))
+    alpha_sum = float(summary.get("alpha_sum", TERMUX_FALLBACK["alpha_sum"]))
+    days = int(summary.get("days", TERMUX_FALLBACK["days"]))
+    trade_date = summary.get("trade_date", TERMUX_FALLBACK["trade_date"])
+    status = summary.get("status", TERMUX_FALLBACK["status"])
+    source = summary.get("source", TERMUX_FALLBACK["source"])
+
+    # 红绿灯判定（基于兜底值或 summary 字段）
+    lock = int(float(summary.get("lock_remaining") or 0))
+    defense = bool(int(float(summary.get("defense") or 0)))
+    if lock > 0:
+        light = {"key": "red", "cls": "fa-red", "emoji": "🔴",
+                 "label": f"熔断锁仓 · 剩余 {lock} 日"}
+    elif defense:
+        light = {"key": "amber", "cls": "fa-amber", "emoji": "🟡",
+                 "label": "防守日 · 强制清仓/防御 regime"}
+    elif day_ret <= -0.02:
+        light = {"key": "amber", "cls": "fa-amber", "emoji": "🟠",
+                 "label": f"急跌预警 · 当日 {day_ret:+.2%}"}
+    else:
+        light = {"key": "green", "cls": "fa-green", "emoji": "🟢",
+                 "label": "绿灯 · 正常运转"}
 
     # —— 顶层三卡：净值 / 今日盈亏 / 红绿灯（任务书硬要求）——
     c1, c2, c3 = st.columns(3)
-    c1.metric("🛰️ 当前净值", f"¥{m['nav']:,.0f}",
-              delta=f"{m['cum']:+.2%} 累计" if m["days"] > 1 else None)
-    c2.metric("今日盈亏", f"{m['pnl']:+,.0f} ¥",
-              delta=f"{m['day_ret']:+.2%}" if m["days"] > 1 else None)
+    c1.metric("📊 当前净值", f"¥{nav:,.0f}",
+              delta=f"{cum:+.2%} 累计" if days > 1 else None)
+    c2.metric("今日盈亏", f"{pnl:+,.0f} ¥",
+              delta=f"{day_ret:+.2%}" if days > 1 else None)
     with c3:
         st.markdown('<div style="font-size:0.78rem;margin-bottom:2px;">'
-                    f"红绿灯（{last.get('trade_date', '')}）</div>",
+                    f"红绿灯（{trade_date}）</div>",
                     unsafe_allow_html=True)
         _badge(light)
-    st.caption(f"台账 {m['days']} 个交易日（影子实盘·确定性引擎；"
-               "看板只读，绝不写库、绝不下单）")
+    st.caption(f"交易日 {days} · 状态：{status} · 数据源：{source} "
+               "（看板只读，绝不写库、绝不下单）")
     _refresh_button()
 
     # —— 次级指标（竖屏 2 列）——
     r1, r2 = st.columns(2), st.columns(2)
-    r1[0].metric("累计净值变化", f"{m['cum']:+.2%}")
-    r2[0].metric("最大回撤", f"{m['mdd']:.2%}")
-    r1[1].metric("年化夏普", f"{m['sharpe']:.3f}")
-    r2[1].metric("Alpha合计 vs 沪深300", f"{m['alpha_sum']:+.2f}pp")
-    if (last.get("notes") or "").strip():
-        st.info(f"最新备注：{last['notes']}")
+    r1[0].metric("累计净值变化", f"{cum:+.2%}")
+    r2[0].metric("最大回撤", f"{mdd:.2%}")
+    r1[1].metric("年化夏普", f"{sharpe:.3f}")
+    r2[1].metric("Alpha合计 vs 沪深300", f"{alpha_sum:+.2f}pp")
 
     st.divider()
-    st.subheader("净值曲线 · 影子 vs 沪深300（起点=1）")
-    if pd is not None:
-        st.line_chart(normalize(eod), height=330, use_container_width=True)
+    st.subheader("系统状态")
+    st.info(f"{source}")
+    st.caption("数据链路：本地 Termux 确定性引擎 → GitHub summary.json → 本看板 "
+               "（只读镜像，一切数字可溯源到 scripts/fetch_data.py 拉取的行情 CSV）。")
+
+    # —— 最近交易流水（来自 summary 的 trades 字段，若有）——
+    trades = summary.get("trades", [])
+    if trades:
+        st.subheader(f"最近交易流水（最近 {min(len(trades), 20)} 笔）")
+        rows = []
+        for t in trades[:20][::-1]:
+            rows.append({
+                "日期": t.get("date", ""),
+                "标的": t.get("code", ""),
+                "方向": t.get("side", ""),
+                "股数": f"{int(t.get('shares', 0)):,}",
+                "成交价(¥)": f"{float(t.get('price', 0)):.3f}",
+                "手续费(¥)": f"{float(t.get('fee', 0)):.2f}",
+                "盈亏(¥)": f"{float(t.get('pnl', 0)):+,.2f}" if t.get("pnl") is not None else "—",
+            })
+        if pd is not None:
+            st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
+        else:
+            st.table(rows)
     else:
-        st.table(normalize(eod))
-
-    st.divider()
-    st.subheader(f"最近交易流水（最多 {len(fills)} 笔 · 按 id 倒序）")
-    if pd is not None:
-        try:
-            st.dataframe(fills_frame(fills), hide_index=True,
-                         use_container_width=True)
-        except TypeError:  # 老版 streamlit 无 hide_index → 退回表格
-            st.table(fills_frame(fills))
-    else:
-        st.json(fills[:40])
-
-    st.caption("数据链路：本地确定性引擎 → sync_to_cloud 增量 push → "
-               "云端 Supabase → 本看板（只读镜像，一切数字可溯源到 "
-               "scripts/fetch_data.py 拉取的行情 CSV）。（AGENTS.md 铁律）")
+        st.caption("暂无交易流水数据（summary.json 未包含 trades 字段）")
 
 
-# @st.cache_data 需在 streamlit 可用时才定义（本地 st=None，模块级装饰会炸）
-def _cached_fetch(url: str, key: str, table: str, order: str,
-                  limit: int) -> list[dict]:
-    """90s 时间窗缓存（云端 key 只作缓存签名不落盘）；本地无 st 直连。"""
-    if st is None:
-        return fetch_rows(table, url, key, limit=limit, order=order)
-
-    @st.cache_data(ttl=90, show_spinner="拉取云端台账…")
-    def _inner(url_: str, key_: str, table_: str, order_: str,
-               limit_: int) -> list[dict]:
-        return fetch_rows(table_, url_, key_, limit=limit_, order=order_)
-    return _inner(url, key, table, order, limit)
-
-
-def fetch_test():
-    """本地自检：配置→拉数→打印指标（不需要 streamlit）。"""
-    url, key, prefix = config_from_env()
-    if not url or not key:
-        print("[cloud] 未配置 SUPABASE_URL/KEY（本地不受影响）；"
-              "参见 README_DEPLOY.md")
-        return 0
-    eod = fetch_rows(f"{prefix}shadow_eod", url, key)
-    fills = fetch_rows(f"{prefix}shadow_fills", url, key,
-                       order="id.desc", limit=60)
-    m = compute_metrics(eod)
-    light = light_state(max(eod, key=lambda r: r.get("trade_date") or ""))
-    print(f"[cloud] eod={len(eod)} rows, fills={len(fills)} rows；"
-          f"nav=¥{m['nav']:,.0f} pnl={m['pnl']:+,.0f} "
-          f"cum={m['cum']:+.2%} mdd={m['mdd']:.2%}"
-          f" 灯={light['emoji']}{light['label']}")
-    return 0
+def _refresh_button():
+    if st.button("🔄 刷新云端数据", type="secondary"):
+        st.cache_data.clear()
+        st.rerun()
 
 
 def selftest() -> int:
@@ -371,16 +339,16 @@ def selftest() -> int:
     # secrets 兼容矩阵（_pick：小写/大写/平铺）
     chk("C1 secrets 小写键名", _pick(
         {"url": "https://x.supabase.co/", "key": "k1"},
-        _URL_NAMES) == "https://x.supabase.co/")
+        ["url", "supabase_url", "SUPABASE_URL"]) == "https://x.supabase.co/")
     chk("C2 secrets 大写键名", _pick(
         {"url": "", "SUPABASE_URL": "https://y.supabase.co"},
-        _URL_NAMES) == "https://y.supabase.co")
+        ["url", "supabase_url", "SUPABASE_URL"]) == "https://y.supabase.co")
     chk("C3 候选序（url 优先于 SUPABASE_URL）", _pick(
-        {"url": "https://a", "SUPABASE_URL": "https://b",
-         "key": "k"}, _URL_NAMES) == "https://a")
+        {"url": "https://a", "SUPABASE_URL": "https://b", "key": "k"},
+        ["url", "supabase_url", "SUPABASE_URL"]) == "https://a")
     chk("C4 全空返回空串", _pick({"url": "", "key": ""},
-                                  _URL_NAMES) == "")
-    chk("C5 缺键不炸", _pick({}, _KEY_NAMES) == "")
+                              ["url", "supabase_url", "SUPABASE_URL"]) == "")
+    chk("C5 缺键不炸", _pick({}, ["key", "supabase_key", "SUPABASE_KEY"]) == "")
 
     # 红绿灯：熔断/防守/急跌/正常 四态 + 优先级
     chk("L1 熔断最高优先",
@@ -431,10 +399,10 @@ def selftest() -> int:
     ff = records(fills_frame([
         {"id": 1, "ts": "2026-10-20 09:30:01", "trade_date": "2026-10-20",
          "leg": "MOM", "code": "510300", "side": "BUY", "shares": 100,
-         "price": 3.905, "fee": 13.44, "reason": "影子:信号", "limit_blocked": 0},
+         "price": 3.905, "fee": 13.44, "reason": "信号", "limit_blocked": 0},
         {"id": 2, "ts": "2026-10-20 09:30:02", "trade_date": "2026-10-20",
          "leg": "MR", "code": "159915", "side": "SELL", "shares": 200,
-         "price": 2.010, "fee": 8.2, "reason": "影子:信号", "limit_blocked": 1}]))
+         "price": 2.010, "fee": 8.2, "reason": "信号", "limit_blocked": 1}]))
     chk("F1 流水倒序(id大在前)", ff[0]["代码"] == "159915")
     chk("F2 涨停拒买标旗", "涨停拒买" in ff[0]["事由"]
         and "涨停拒买" not in ff[1]["事由"])

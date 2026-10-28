@@ -27,10 +27,27 @@ sys.path.insert(0, BASE)
 import fetch_data
 import portfolio
 import risk_control
+import screener
 import strategy
 import regime_filter
 
 REPORT_DIR = os.path.join(ROOT, "reports")
+
+
+def _build_screener_cfg(params: dict) -> dict:
+    """从 params.yaml 的 screener 块构建 screener 运行配置。"""
+    sc = params.get("screener", {})
+    return {
+        "select_count": sc.get("select_count", 3),
+        "volume_ratio_threshold": sc.get("volume_ratio_threshold", 2.5),
+        "roc_threshold": sc.get("roc_threshold", 0.15),
+        "bull_volume_ratio_threshold": sc.get("bull_volume_ratio_threshold", 0.65),
+        "lookback_days": sc.get("lookback_days", 20),
+        "roc_days": sc.get("roc_days", 10),
+        "ma_fast": sc.get("ma_fast", 5),
+        "ma_mid": sc.get("ma_mid", 10),
+        "ma_slow": sc.get("ma_slow", 20),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -81,7 +98,26 @@ def engine_run(start_date: str | None = None, report_from: str | None = None,
 
     for i in range(i0, len(dates)):
         date = dates[i]
-        prev_sig = {c: sig_by[c].get(dates[i - 1], 0.0) for c in codes}
+        prev_date = dates[i - 1]
+        prev_sig = {c: sig_by[c].get(prev_date, 0.0) for c in codes}
+        # ---- 选股过滤：基于前一日收盘数据动态选股，只拦截买入信号 ----
+        # 盘前语义：用截至 prev_date 的行情运行 screiner，选出 date 日可买股票
+        if params.get("screener", {}).get("enable", False):
+            codes_with_meta = [w for w in watch_all if not w.get("exclude_core")]
+            selected = screener.run_for_date(codes_with_meta, _build_screener_cfg(params), prev_date)
+            today_watchlist = {s["code"] for s in selected}
+        else:
+            today_watchlist = {w["code"] for w in watch if not w.get("exclude_core")}
+        filtered_sig = {}
+        for c in codes:
+            sig = prev_sig[c]
+            if sig > 0 and c not in today_watchlist:
+                # 买入信号但该股不在当日选股结果中：拦截开仓
+                filtered_sig[c] = 0.0
+            else:
+                # 卖出信号（sig == 0）或该股在 watchlist 中：放行（确保止损/止盈平仓）
+                filtered_sig[c] = sig
+        prev_sig = filtered_sig
         day_price = {c: by_date[c][date] for c in codes if date in by_date[c]}
 
         orders = []

@@ -1,0 +1,197 @@
+{
+  "nav": 1593578.29,
+  "cum": 0.59357829,
+  "pnl": 0.0,
+  "day_ret": 0.0,
+  "mdd": 0.0933,
+  "sharpe": 1.225,
+  "alpha_sum": 0.0,
+  "days": 702,
+  "trade_date": "2026-10-28",
+  "positions": {},
+  "cash": 1593578.2851292666,
+  "status": "空仓",
+  "source": "Termux 本地模拟盘（main，MA 8/30，benchmark_filter:false，screener:封存）",
+  "trades": [
+    {
+      "date": "2026-05-08",
+      "code": "518880",
+      "side": "SELL",
+      "shares": 39300,
+      "price": 9.87,
+      "fee": 77.58,
+      "pnl": -2670.87
+    },
+    {
+      "date": "2026-06-10",
+      "code": "510300",
+      "side": "SELL",
+      "shares": 85400,
+      "price": 4.7895,
+      "fee": 81.81,
+      "pnl": 7178.99
+    },
+    {
+      "date": "2026-06-16",
+      "code": "159915",
+      "side": "SELL",
+      "shares": 113700,
+      "price": 4.0676,
+      "fee": 92.5,
+      "pnl": 64283.67
+    },
+    {
+      "date": "2026-06-22",
+      "code": "159915",
+      "side": "BUY",
+      "shares": 98800,
+      "price": 4.2914,
+      "fee": 84.8,
+      "pnl": null
+    },
+    {
+      "date": "2026-06-23",
+      "code": "510300",
+      "side": "BUY",
+      "shares": 82500,
+      "price": 5.0795,
+      "fee": 83.81,
+      "pnl": null
+    },
+    {
+      "date": "2026-06-30",
+      "code": "513500",
+      "side": "SELL",
+      "shares": 170400,
+      "price": 2.4958,
+      "fee": 85.06,
+      "pnl": 22671.93
+    },
+    {
+      "date": "2026-07-09",
+      "code": "510300",
+      "side": "SELL",
+      "shares": 82500,
+      "price": 4.8125,
+      "fee": 79.41,
+      "pnl": -22105.36
+    },
+    {
+      "date": "2026-07-10",
+      "code": "159915",
+      "side": "SELL",
+      "shares": 98800,
+      "price": 4.0456,
+      "fee": 79.94,
+      "pnl": -24365.44
+    },
+    {
+      "date": "2026-07-17",
+      "code": "513500",
+      "side": "BUY",
+      "shares": 160600,
+      "price": 2.5483,
+      "fee": 81.85,
+      "pnl": null
+    },
+    {
+      "date": "2026-07-28",
+      "code": "513500",
+      "side": "SELL",
+      "shares": 160600,
+      "price": 2.4988,
+      "fee": 80.26,
+      "pnl": -8037.97
+    },
+    {
+      "date": "2026-08-05",
+      "code": "513500",
+      "side": "BUY",
+      "shares": 154700,
+      "price": 2.6323,
+      "fee": 81.44,
+      "pnl": null
+    },
+    {
+      "date": "2026-08-07",
+      "code": "518880",
+      "side": "BUY",
+      "shares": 46600,
+      "price": 8.7759,
+      "fee": 81.79,
+      "pnl": null
+    },
+    {
+      "date": "2026-08-18",
+      "code": "510300",
+      "side": "BUY",
+      "shares": 86100,
+      "price": 4.7945,
+      "fee": 82.56,
+      "pnl": null
+    },
+    {
+      "date": "2026-08-19",
+      "code": "159915",
+      "side": "BUY",
+      "shares": 109500,
+      "price": 3.6554,
+      "fee": 80.05,
+      "pnl": null
+    },
+    {
+      "date": "2026-08-25",
+      "code": "510300",
+      "side": "SELL",
+      "shares": 86100,
+      "price": 4.6005,
+      "fee": 79.22,
+      "pnl": -16779.19
+    },
+    {
+      "date": "2026-08-28",
+      "code": "159915",
+      "side": "SELL",
+      "shares": 109500,
+      "price": 3.4777,
+      "fee": 76.16,
+      "pnl": -19539.54
+    },
+    {
+      "date": "2026-09-14",
+      "code": "513500",
+      "side": "SELL",
+      "shares": 154700,
+      "price": 2.6637,
+      "fee": 82.42,
+      "pnl": 4780.36
+    },
+    {
+      "date": "2026-09-14",
+      "code": "518880",
+      "side": "SELL",
+      "shares": 46600,
+      "price": 8.9061,
+      "fee": 83.0,
+      "pnl": 5984.75
+    },
+    {
+      "date": "2026-09-29",
+      "code": "513500",
+      "side": "BUY",
+      "shares": 149600,
+      "price": 2.6793,
+      "fee": 80.16,
+      "pnl": null
+    },
+    {
+      "date": "2026-10-23",
+      "code": "513500",
+      "side": "SELL",
+      "shares": 149600,
+      "price": 2.6117,
+      "fee": 78.14,
+      "pnl": -10185.3
+    }
+  ]
+}

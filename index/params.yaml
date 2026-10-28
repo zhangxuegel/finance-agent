@@ -25,12 +25,55 @@ strategy:
   # engine: A = 双均线趋势追踪；B = 布林带均值回归
   engine: A
   A:
-    ma_fast: 5                 # 快均线周期
-    ma_slow: 20                # 慢均线周期
+    ma_fast: 8                 # 快均线周期（网格搜索最优：8/30）
+    ma_slow: 30                # 慢均线周期（网格搜索最优：8/30）
+    # ---- 大盘过滤（新增）----
+    benchmark_filter: false     # 已锁定 false：大盘过滤未启用（见下方对比报告）
+    benchmark_code: "510300"   # 大盘基准代码（沪深300ETF）
+    benchmark_ma: 20           # 大盘基准均线周期（MA20）
   B:
     window: 20                 # 布林带均线窗口
     n_std: 2.0                 # 标准差倍数
     exit: mid                  # 触中轨离场（可选 "mid"）
+
+# ============================================================================
+# T-Fin 选股过滤模块（新增）
+# 所有阈值均在此登记，screener.py 中禁止硬编码任何数字
+# ============================================================================
+screener:
+  enable: false                   # 已封存：仅作盘前参考，不挂钩交易引擎
+  select_count: 3                 # 每日选股数量（上限）
+  # 候选股票池：screener 从此池中筛选，所有代码须在 watchlist 中有真实行情数据
+  candidate_pool:
+    - code: "510300"
+      name: 沪深300ETF
+      secid: "1.510300"
+      kind: etf
+    - code: "159915"
+      name: 创业板ETF
+      secid: "0.159915"
+      kind: etf
+    - code: "513500"
+      name: 标普500ETF(QDII)
+      secid: "1.513500"
+      kind: etf
+    - code: "518880"
+      name: 黄金ETF
+      secid: "1.518880"
+      kind: etf
+    - code: "510880"
+      name: 上证红利ETF(华泰柏瑞)
+      secid: "1.510880"
+      kind: etf
+  # ---- 筛选阈值（全部登记，禁止代码写死）----
+  volume_ratio_threshold: 1.5     # 量能极值：当日成交额 / 过去20日均额 > 1.5
+  roc_threshold: 0.08             # 强趋势：过去10日涨幅(ROC) > 8%
+  bull_volume_ratio_threshold: 0.50  # 强承接：过去20日阳线成交量占比 > 50%
+  lookback_days: 20               # 量能/承接回看窗口（20日）
+  roc_days: 10                    # 涨幅回看窗口（10日）
+  ma_fast: 5                      # 趋势判定：MA5
+  ma_mid: 10                      # 趋势判定：MA10
+  ma_slow: 20                     # 趋势判定：MA20
 
 # T-Fin27 登记区块（2026-10-21）：分红与开局锚点 —— audit_fill_time_lock 口径自洽所需
 dividends:
