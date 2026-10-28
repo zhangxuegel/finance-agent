@@ -116,34 +116,57 @@ def _pick(section, names: list[str]) -> str:
 
 
 def load_summary_from_github() -> dict | None:
-    """从 GitHub raw URL 拉取 summary.json（只读）。失败返回 None。
+    """从本地 summary.json 或 CDN 拉取看板数据（只读）。
 
-    为排查 Streamlit Cloud 环境下的读取失败，所有异常和非 200 响应
-    都会打印明确的错误日志（实际请求 URL、HTTP 状态码、异常信息）。
+    读取优先级：
+      1) 本地文件：CWD/summary.json，或脚本所在仓库根目录下的 summary.json
+         （Streamlit Cloud 容器已把整仓库拉到 /mount/src/finance-agent，
+          可直接本地读取，无需外网请求）
+      2) CDN 兜底：jsDelivr 地址，绕过 GitHub raw 的网络策略限制
+      3) 返回 None，由 run_app() 使用 TERMUX_FALLBACK 兜底
     """
-    url = _GITHUB_RAW_URL
-    if "placeholder" in url:
-        print("[cloud] GITHUB_RAW_URL 未配置（st.secrets/os.environ 均为空），跳过拉取")
-        return None
-    # 拼接时间戳参数，绕过 GitHub Raw CDN 缓存，强制获取最新版本
     import time
-    sep = "&" if "?" in url else "?"
-    fetch_url = f"{url}{sep}t={int(time.time())}"
+    from pathlib import Path
+
+    # 候选本地路径
+    candidates = [
+        Path("summary.json"),                                   # CWD
+        Path(__file__).resolve().parent.parent / "summary.json", # 仓库根目录
+    ]
+
+    # —— 第 1 优先级：本地文件读取 ——
+    for path in candidates:
+        try:
+            if path.exists() and path.is_file():
+                with open(path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                if isinstance(data, dict):
+                    print(f"[cloud] summary.json 本地读取成功：{path} "
+                          f"(nav={data.get('nav')}, date={data.get('trade_date')})")
+                    return data
+                print(f"[cloud] 本地 {path} 不是 dict 类型，跳过")
+        except Exception as e:  # noqa: BLE001 —— 文件缺失/权限/解析失败
+            print(f"[cloud] 本地读取 {path} 失败：{type(e).__name__}: {e}")
+
+    # —— 第 2 优先级：jsDelivr CDN 兜底 ——
+    cdn_url = ("https://cdn.jsdelivr.net/gh/zhangxuegel/finance-agent@main/"
+               f"summary.json?t={int(time.time())}")
     try:
-        print(f"[cloud] 正在拉取 summary.json：{fetch_url}")
-        req = urllib.request.Request(fetch_url, headers={"User-Agent": "finance-agent-cloud/1.0"})
+        print(f"[cloud] 正在从 CDN 拉取 summary.json：{cdn_url}")
+        req = urllib.request.Request(cdn_url, headers={"User-Agent": "finance-agent-cloud/1.0"})
         with urllib.request.urlopen(req, timeout=10) as resp:
             if resp.status != 200:
-                print(f"[cloud] GitHub 返回非 200 状态码：{resp.status}（URL: {fetch_url}）")
+                print(f"[cloud] CDN 返回非 200 状态码：{resp.status}")
                 return None
-            raw = resp.read().decode("utf-8")
-            data = json.loads(raw)
+            data = json.loads(resp.read().decode("utf-8"))
         if isinstance(data, dict):
-            print(f"[cloud] summary.json 拉取成功，nav={data.get('nav')}, date={data.get('trade_date')}")
+            print(f"[cloud] CDN summary.json 拉取成功，nav={data.get('nav')}")
             return data
-        print(f"[cloud] GitHub 返回数据不是 dict 类型（URL: {fetch_url}）")
+        print("[cloud] CDN 返回数据不是 dict 类型")
     except Exception as e:  # noqa: BLE001 —— 网络不可用或文件缺失
-        print(f"[cloud] 拉取 summary.json 失败：{type(e).__name__}: {e}（URL: {fetch_url}）")
+        print(f"[cloud] CDN 拉取 summary.json 失败：{type(e).__name__}: {e}")
+
+    print("[cloud] 本地 + CDN 均不可用，将使用 Termux 兜底值")
     return None
 
 
