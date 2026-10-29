@@ -47,3 +47,5 @@
 2026-10-27 13:57:53 [cloud_sync] eod+1 fills+0 → {'sb_shadow_eod': 1, 'sb_shadow_fills': 0}
 2026-10-28 14:33:19 [stage_fatal] stage_match: KeyError 'D'
 2026-10-28 14:35:56 [cloud_sync] eod+1 fills+0 → {'sb_shadow_eod': 1, 'sb_shadow_fills': 0}
+2026-10-29 14:41:27 [stage_fatal] stage_match: KeyError 'D'
+2026-10-29 14:43:48 [cloud_sync] eod+1 fills+0 → {'sb_shadow_eod': 1, 'sb_shadow_fills': 0}
