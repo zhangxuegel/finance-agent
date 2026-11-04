@@ -1,11 +1,11 @@
 {
- "prev_date": "2026-10-30",
+ "prev_date": "2026-11-02",
  "light": "red",
  "gate_extras": {
-  "newest": -0.011189,
+  "newest": 0.00492,
   "worst5": -0.0134,
   "hi60": 4.801,
-  "latest": 4.065,
+  "latest": 4.085,
   "recovered": false
  },
  "defense": true,
@@ -14,7 +14,7 @@
   "A": {
    "510300": 0.0,
    "159915": 0.0,
-   "513500": 1.0,
+   "513500": 0.0,
    "518880": 0.0
   },
   "B": {
@@ -46,19 +46,19 @@
  ],
  "race_pending": true,
  "target_weights": {
-  "weight_a": 0.135,
-  "weight_b": 0.18,
+  "weight_a": 0.18,
+  "weight_b": 0.135,
   "c_buffer": 0.1
  },
- "trade_date": "2026-11-03",
+ "trade_date": "2026-11-04",
  "mode": {
-  "date": "2026-11-03",
+  "date": "2026-11-04",
   "mode": "live",
   "reason": "",
-  "ts": "2026-11-03 01:28:33"
+  "ts": "2026-11-04 23:47:50"
  },
  "engine_gate": {
-  "date": "2026-10-30",
+  "date": "2026-11-02",
   "defense": true,
   "light": "red",
   "crash_gate": true
