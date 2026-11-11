@@ -79,3 +79,5 @@
 2026-11-09 17:50:17 [eod_gap] 510300: 2026-11-10 行情未出，EOD 以最近一日 2026-11-09 收盘估值
 2026-11-09 17:50:18 [eod_gap] 000300: 2026-11-10 行情未出，EOD 以最近一日 2026-11-09 收盘估值
 2026-11-09 17:51:11 [cloud_sync] eod+1 fills+0 → {'sb_shadow_eod': 1, 'sb_shadow_fills': 0}
+2026-11-11 15:38:49 [stage_fatal] stage_match: KeyError 'D'
+2026-11-11 15:39:10 [cloud_sync] eod+1 fills+0 → {'sb_shadow_eod': 1, 'sb_shadow_fills': 0}
