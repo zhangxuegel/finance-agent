@@ -1,11 +1,11 @@
 {
- "prev_date": "2026-11-11",
+ "prev_date": "2026-11-12",
  "light": "red",
  "gate_extras": {
-  "newest": 0.003628,
+  "newest": -0.008675,
   "worst5": -0.016925,
   "hi60": 4.801,
-  "latest": 4.15,
+  "latest": 4.114,
   "recovered": false
  },
  "defense": true,
@@ -50,15 +50,15 @@
   "weight_b": 0.135,
   "c_buffer": 0.1
  },
- "trade_date": "2026-11-13",
+ "trade_date": "2026-11-17",
  "mode": {
-  "date": "2026-11-13",
+  "date": "2026-11-17",
   "mode": "live",
   "reason": "",
-  "ts": "2026-11-13 00:19:50"
+  "ts": "2026-11-17 01:30:20"
  },
  "engine_gate": {
-  "date": "2026-11-11",
+  "date": "2026-11-12",
   "defense": true,
   "light": "red",
   "crash_gate": true
